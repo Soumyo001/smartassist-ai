@@ -128,100 +128,59 @@ def filter_tasks(
     ]
 
 
+
 def ordering(
     message: str,
     suggested: str | None = None,
 ) -> tuple[str, bool, list[str]]:
-    """
-    Return:
-      sort_field, reverse, priority_order
-    """
+    """Return sort field, reverse flag, and priority rank order."""
 
     text = normal_words(message)
-
-    priority_order = [
-        "High",
-        "Low",
-        "Medium",
-    ]
-
-    if re.search(
-        r"\bhigh\b.*\bmedium\b.*\blow\b",
-        text,
-    ):
-        priority_order = [
-            "High",
-            "Medium",
-            "Low",
-        ]
-
-    elif re.search(
-        r"\blow\b.*\bmedium\b.*\bhigh\b",
-        text,
-    ):
-        priority_order = [
-            "Low",
-            "Medium",
-            "High",
-        ]
+    priorities = ["High", "Medium", "Low"]
 
     if (
         "priority" in text
         and any(
-            word in text
-            for word in (
-                "order", "sort", "rank",
-                "first", "last",
+            x in text
+            for x in (
+                "order", "sort", "rank", "first",
+                "last", "ascending", "descending",
             )
         )
+    ) or re.search(
+        r"\b(high|medium|low)\b.*\b(after|before)\b",
+        text,
+    ) or (
+        len(set(re.findall(
+            r"\b(high|medium|low)\b", text
+        ))) == 3
+        and any(x in text for x in ("order", "sort", "then"))
     ):
         field = "priority"
 
     elif (
-        any(
-            word in text
-            for word in (
-                "due date",
-                "deadline",
-                "due first",
-            )
-        )
-        and any(
-            word in text
-            for word in (
-                "order",
-                "sort",
-                "earliest",
-                "latest",
-                "first",
-            )
-        )
+        any(x in text for x in (
+            "due date", "deadline", "due first"
+        ))
+        and any(x in text for x in (
+            "order", "sort", "earliest", "latest", "first"
+        ))
     ):
         field = "due_date"
 
-    elif any(
-        word in text
-        for word in (
-            "alphabetically",
-            "by name",
-            "by title",
-        )
-    ):
+    elif any(x in text for x in (
+        "alphabetically", "by name", "by title"
+    )):
         field = "title"
 
-    elif any(
-        word in text
-        for word in (
-            "by status",
-            "by progress",
-        )
-    ):
+    elif any(x in text for x in (
+        "by status", "by progress"
+    )):
         field = "status"
 
     elif re.search(
-        r"\b(by id|by number|numerically|"
-        r"ascending|descending|ordered|"
-        r"sorted|sort|order)\b",
+        r"\b(by id|by number|numerically|ascending|"
+        r"descending|ordered|sorted|sort|order)\b",
         text,
     ):
         field = "id"
@@ -236,15 +195,70 @@ def ordering(
             else "id"
         )
 
-    reverse = bool(
-        re.search(
-            r"\b(descending|reverse|newest|"
-            r"largest first)\b",
+    if field == "priority":
+
+        # Conventional default: High -> Medium -> Low.
+        # Descending uses this default.
+        if re.search(
+            r"\b(ascending|lowest first|low to high)\b",
+            text,
+        ):
+            priorities = ["Low", "Medium", "High"]
+
+        # Custom relative order:
+        # "Low comes after High" -> High, Low, Medium.
+        relative = re.search(
+            r"\b(high|medium|low)\s+"
+            r"(?:comes?\s+|is\s+)?"
+            r"(?:right\s+|immediately\s+)?"
+            r"(after|before)\s+"
+            r"(high|medium|low)\b",
             text,
         )
-    )
 
-    return field, reverse, priority_order
+        if relative:
+            moving, position, reference = relative.groups()
+            moving = moving.title()
+            reference = reference.title()
+
+            if moving != reference:
+                priorities.remove(moving)
+                reference_index = priorities.index(reference)
+                insert_at = reference_index + (
+                    position == "after"
+                )
+                priorities.insert(insert_at, moving)
+
+        else:
+            # Explicit order:
+            # "High then Low then Medium".
+            labels = [
+                match.group().title()
+                for match in re.finditer(
+                    r"\b(high|medium|low)\b",
+                    text,
+                )
+            ]
+
+            unique = list(dict.fromkeys(labels))
+
+            if len(unique) == 3 and any(
+                x in text
+                for x in (
+                    "order", "sort", "then", "first", "last"
+                )
+            ):
+                priorities = unique
+
+        # Do not reverse priority again.
+        return "priority", False, priorities
+
+    reverse = bool(re.search(
+        r"\b(descending|reverse|newest|largest first)\b",
+        text,
+    ))
+
+    return field, reverse, priorities
 
 
 def sort_tasks(
@@ -257,8 +271,8 @@ def sort_tasks(
 
     priorities = priority_order or [
         "High",
-        "Low",
         "Medium",
+        "Low",
     ]
 
     priority_rank = {
@@ -400,3 +414,90 @@ def format_action_result(
         f"{task['priority']} priority · {due}"
         f"  \n*Action: `{action}`*"
     )
+
+def recommend_next_tasks(
+    tasks: list[dict],
+    *,
+    today=None,
+    limit: int = 3,
+) -> str:
+    """Grounded task-coaching response. Does not modify tasks."""
+
+    from datetime import date, timedelta
+
+    today = today or date.today()
+
+    open_tasks = [
+        task for task in tasks
+        if task["status"] != "Done"
+    ]
+
+    if not open_tasks:
+        return (
+            "You're all caught up—there are no unfinished tasks. "
+            "Would you like me to help plan your next task?"
+        )
+
+    priority_rank = {
+        "High": 0,
+        "Medium": 1,
+        "Low": 2,
+    }
+
+    def urgency(task):
+        raw = task.get("due_date")
+
+        if not raw:
+            return (4, "No deadline set")
+
+        try:
+            due = date.fromisoformat(raw)
+        except (ValueError, TypeError):
+            return (4, "Deadline needs checking")
+
+        if due < today:
+            return (0, f"Overdue since {raw}")
+
+        if due == today:
+            return (1, "Due today")
+
+        if due == today + timedelta(days=1):
+            return (2, "Due tomorrow")
+
+        return (3, f"Due {raw}")
+
+    ranked = sorted(
+        open_tasks,
+        key=lambda task: (
+            urgency(task)[0],
+            priority_rank.get(task["priority"], 3),
+            0 if task["status"] == "In progress" else 1,
+            task.get("due_date") or "9999-12-31",
+            task["id"],
+        ),
+    )
+
+    lines = [
+        f"You've got **{len(open_tasks)} unfinished task(s)**. "
+        "Here's where I'd focus first:",
+        "",
+    ]
+
+    for index, task in enumerate(ranked[:limit], start=1):
+        reason = urgency(task)[1]
+
+        lines.append(
+            f"{index}. **#{task['id']} · {task['title']}** — "
+            f"{task['priority']} priority; {reason.lower()}. "
+            f"Status: {task['status']}."
+        )
+
+    lines.extend([
+        "",
+        "**Suggested approach:** Start with the first task, "
+        "identify its next concrete action, and finish one "
+        "focused work block before moving on. "
+        "Want me to adjust the priorities or deadlines?",
+    ])
+
+    return "\n".join(lines)
