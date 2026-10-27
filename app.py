@@ -41,7 +41,7 @@ st.markdown("""
 </style>
 
 <div class="taskflow-header">
-    <strong>SMARTASSIST</strong>
+    <strong>Smartassist-AI</strong>
     <span>AI TASK MANAGER</span>
 </div>
 """, unsafe_allow_html=True)

@@ -1,0 +1,10 @@
+{
+  "enabled_tools": [
+    "create_task",
+    "list_tasks",
+    "get_task",
+    "update_task",
+    "complete_task",
+    "delete_task"
+  ]
+}
