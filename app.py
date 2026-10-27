@@ -532,15 +532,17 @@ with right:
             '</div>'
         )
 
-        reasoning_mode = st.selectbox(
+        reasoning_mode = st.segmented_control(
             "Reasoning effort",
             options=["Low", "Medium", "High"],
-            index=1,
+            selection_mode="single",
+            default="Medium",
+            required=True,
             key="smartassist_reasoning_mode",
             help=(
-                "Low: faster responses. "
-                "Medium: balanced reasoning. "
-                "High: more effort for complex task instructions."
+                "Low: simple requests. "
+                "Medium: balanced. "
+                "High: complex task planning."
             ),
         )
 
@@ -562,6 +564,23 @@ with right:
                     item["role"],
                     item["content"],
                 )
+        
+        last_activity = st.session_state.get(
+            "last_agent_activity"
+        )
+
+        if last_activity:
+            with st.expander(
+                "Last request · execution activity",
+                expanded=False,
+            ):
+                st.caption(
+                    "Reasoning setting: "
+                    + last_activity["effort"]
+                )
+
+                for step in last_activity["steps"]:
+                    st.markdown(f"- {step}")
 
         prompt = st.chat_input(
             "Type a task instruction and press Enter...",
@@ -599,9 +618,19 @@ with right:
 
                         try:
                             progress_line = st.empty()
+                            activity = []
 
                             def report_progress(stage: str) -> None:
-                                progress_line.caption(stage)
+                                if not activity or activity[-1] != stage:
+                                    activity.append(stage)
+
+                                progress_line.markdown(
+                                    "**Execution activity**\n\n"
+                                    + "\n".join(
+                                        f"- {step}"
+                                        for step in activity
+                                    )
+                                )
 
                             response = run_turn(
                                 prompt,
@@ -647,5 +676,10 @@ with right:
                             st.session_state.chat_messages = (
                                 load_chat_history(THREAD_ID)
                             )
+
+                            st.session_state["last_agent_activity"] = {
+                                "effort": reasoning_mode,
+                                "steps": activity.copy(),
+                            }
 
                             st.rerun()

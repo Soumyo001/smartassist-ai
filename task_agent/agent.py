@@ -1341,12 +1341,14 @@ def build_groq_planner(
         api_key=api_key,
         temperature=0,
         reasoning_effort=effort,
+        reasoning_format="hidden",
         max_retries=1,
     )
 
     return model.with_structured_output(
         ActionPlan,
-        method="function_calling",
+        method="json_schema",
+        strict=False,
     )
 
 
