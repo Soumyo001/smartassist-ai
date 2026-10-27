@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html import escape
 import logging
 from zoneinfo import ZoneInfo
@@ -23,274 +23,290 @@ st.set_page_config(
 )
 
 
-# -------------------------------------------------
+# ----------------------------------------
 # DESIGN
-# -------------------------------------------------
+# ----------------------------------------
 
-st.markdown("""
+st.html("""
 <style>
-.stApp {
-    background: #f4f7fc !important;
-    color: #172640 !important;
+.stApp, section[data-testid="stMain"] {
+    background: #f4f7fd !important;
 }
 
-/* Remove Streamlit's top header and toolbar */
 header[data-testid="stHeader"],
 [data-testid="stToolbar"],
 [data-testid="stDecoration"],
-footer,
-#MainMenu {
+#MainMenu, footer {
     display: none !important;
 }
 
-section[data-testid="stMain"] {
-    background: #f4f7fc !important;
-}
-
 .block-container {
-    max-width: 1390px !important;
-    padding: 22px 26px 36px !important;
+    max-width: 1350px !important;
+    padding: 25px 25px 45px !important;
 }
 
-/* Typography */
-[data-testid="stMarkdownContainer"] h1.page-heading {
-    color: #172640 !important;
-    font-weight: 800 !important;
-    letter-spacing: -0.035em !important;
-    font-size: clamp(30px, 3vw, 40px) !important;
-    line-height: 1.15 !important;
-}
-
-[data-testid="stMarkdownContainer"] p {
-    color: #475c7b;
-}
-
-/* Top header */
+/* Brand header */
 .brandbar {
-    background: #182b4d;
-    color: #fff;
-    border-radius: 18px;
-    padding: 22px 30px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    box-shadow: 0 10px 25px rgba(21,43,79,.10);
-    margin-bottom: 27px;
-}
-
-.brandbar strong {
-    font-size: 24px;
-    font-weight: 850;
-    letter-spacing: .055em;
-    color: #fff;
-}
-
-.brandbar span {
-    font-size: 12px;
-    color: #c2d3ee;
-    letter-spacing: .12em;
-    font-weight: 750;
-}
-
-.subtitle {
-    color: #687e9d;
-    margin: 5px 0 20px;
-    font-size: 15px;
-}
-
-/* Dashboard statistics */
-.stats {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-    margin-bottom: 16px;
-}
-
-.stats > div {
-    background: #fff;
-    border: 1px solid #e0e8f4;
-    border-radius: 12px;
-    padding: 13px 15px;
-}
-
-.stats small {
-    display: block;
-    color: #6d83a2;
-    font-size: 12px;
-}
-
-.stats strong {
-    display: block;
-    color: #203a64;
-    font-size: 23px;
-    margin-top: 2px;
-}
-
-/* Task board */
-.section-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 13px;
+    background: linear-gradient(110deg,#152a4d,#203d6a);
+    color: #fff;
+    border-radius: 18px;
+    padding: 22px 27px;
+    margin-bottom: 25px;
+    box-shadow: 0 15px 32px rgba(21,42,77,.13);
 }
 
-.section-head strong {
-    color: #1b2d4a;
-    font-size: 20px;
+.brand {
+    font-size: 22px;
+    font-weight: 850;
+    letter-spacing: .045em;
+    color: #fff;
+}
+
+.brand-note {
+    font-size: 11px;
+    letter-spacing: .13em;
+    font-weight: 800;
+    color: #bed3f5;
+}
+
+/* Page titles */
+.page-heading {
+    font-size: 33px;
+    font-weight: 850;
+    letter-spacing: -.04em;
+    color: #172a49;
+}
+
+.page-subtitle {
+    color: #7385a2;
+    font-size: 14px;
+    margin: 4px 0 19px;
+}
+
+/* Dashboard metrics */
+.metric-strip {
+    display: grid;
+    grid-template-columns: repeat(3,minmax(0,1fr));
+    gap: 10px;
+    margin: 18px 0 17px;
+}
+
+.metric {
+    background: #fff;
+    border: 1px solid #dde7f4;
+    border-radius: 13px;
+    padding: 15px 17px;
+}
+
+.metric-label {
+    display: block;
+    color: #7587a2;
+    font-size: 12px;
+}
+
+.metric-number {
+    display: block;
+    color: #172d52;
+    font-weight: 800;
+    font-size: 27px;
+    margin-top: 3px;
+}
+
+/* Task board */
+.section-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 13px;
+    color: #203451;
+    font-weight: 800;
+    font-size: 18px;
 }
 
 .count-pill {
-    color: #3c5da2;
-    background: #eaf0fc;
-    font-size: 13px;
-    font-weight: 750;
-    padding: 7px 13px;
-    border-radius: 10px;
+    background: #e8efff;
+    color: #315ba3;
+    border-radius: 9px;
+    padding: 7px 12px;
+    font-size: 12px;
+}
+
+.task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
 }
 
 .task-card {
     display: flex;
     align-items: center;
     gap: 13px;
-    border: 1px solid #dfe7f3;
+    padding: 13px 15px;
+    background: #f9fbff;
+    border: 1px solid #dde7f4;
     border-radius: 12px;
-    padding: 15px;
-    margin: 10px 0;
-    background: #f8faff;
 }
 
-.task-dot {
-    color: #789bd7;
-    font-size: 23px;
+.task-status-icon {
+    flex: none;
+    font-size: 22px;
+    color: #829ed1;
     line-height: 1;
-    flex-shrink: 0;
 }
 
-.task-dot.done {
-    color: #208966;
+.task-status-icon.is-done {
+    color: #268563;
 }
 
 .task-main {
-    flex: 1;
     min-width: 0;
+    flex: 1;
 }
 
 .task-name {
-    font-size: 16px;
-    color: #172640;
+    color: #182c4d;
     font-weight: 750;
+    font-size: 15px;
     overflow-wrap: anywhere;
 }
 
-.task-name.done {
+.task-name.is-done {
     text-decoration: line-through;
-    color: #8997ad;
+    color: #8999b1;
 }
 
 .task-meta {
-    color: #69809f;
     font-size: 12px;
-    margin-top: 4px;
+    color: #7b8eab;
+    margin-top: 5px;
 }
 
 .task-description {
-    color: #607799;
     font-size: 12px;
-    margin-top: 7px;
+    color: #677c9c;
+    margin-top: 5px;
     overflow-wrap: anywhere;
 }
 
 /* Priority badges */
 .priority-pill {
-    border-radius: 9px;
-    padding: 8px 12px;
-    min-width: 74px;
+    flex: none;
+    min-width: 70px;
     text-align: center;
-    font-size: 12px;
+    border-radius: 9px;
+    padding: 8px 11px;
+    font-size: 11px;
     font-weight: 750;
 }
 
 .priority-high {
-    background: #ffebe7;
-    color: #b84332;
+    background: #ffe8e5;
+    color: #b74237;
 }
 
 .priority-medium {
-    background: #fff0d5;
-    color: #936009;
+    background: #fff1d5;
+    color: #98600b;
 }
 
 .priority-low {
-    background: #def2e9;
-    color: #217555;
+    background: #dff3e9;
+    color: #247756;
 }
 
 /* Assistant */
 .assistant-top {
-    background: #eaf0fd;
+    background: #e8effc;
+    color: #1c3e70;
     border-radius: 13px;
-    padding: 15px 17px;
-    color: #1b3d70;
-    font-size: 20px;
-    font-weight: 800;
+    padding: 15px 16px;
+    font-weight: 850;
+    font-size: 19px;
 }
 
 .assistant-sub {
-    color: #7187a4;
-    margin: 9px 0 14px;
-    font-size: 13px;
+    font-size: 12px;
+    color: #7a8aa6;
+    margin: 10px 0 14px;
 }
 
+/* Chat layout and avatar alignment */
 div[data-testid="stChatMessage"] {
-    background: #f5f8fe !important;
-    border: 1px solid #e2eafa !important;
-    border-radius: 15px !important;
-    padding: 10px 12px !important;
-    margin-bottom: 9px !important;
+    align-items: center !important;
+    border: 1px solid #e0e8f7;
+    background: #f8faff !important;
+    border-radius: 13px !important;
+    padding: 12px !important;
+    margin: 7px 0 !important;
 }
 
-div[data-testid="stChatMessage"] p,
-div[data-testid="stChatMessage"] li,
-div[data-testid="stChatMessage"] span {
-    color: #1c3153 !important;
+div[data-testid="stChatMessage"]
+[data-testid="stChatMessageAvatarUser"],
+div[data-testid="stChatMessage"]
+[data-testid="stChatMessageAvatarAssistant"] {
+    align-self: center !important;
+}
+
+div[data-testid="stChatMessageContent"] {
+    min-width: 0 !important;
+    align-self: center !important;
+}
+
+div[data-testid="stChatMessageContent"] p {
+    margin: 0.18rem 0 !important;
+    color: #1b3152 !important;
+    line-height: 1.55;
     overflow-wrap: anywhere;
+}
+
+div[data-testid="stChatMessageContent"] ul,
+div[data-testid="stChatMessageContent"] ol {
+    padding-left: 1.1rem;
+    margin: .4rem 0 !important;
+}
+
+.user-text {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: #183154;
+    line-height: 1.45;
+    margin: 0;
+}
+
+div[data-testid="stChatInput"] textarea {
+    background: #fff !important;
+    color: #172d50 !important;
 }
 
 div[data-testid="stChatInput"] {
     border-radius: 13px !important;
 }
 
-div[data-testid="stChatInput"] textarea {
-    background: #fff !important;
-    color: #1b2b44 !important;
-}
-
-div[data-testid="stChatInput"] textarea::placeholder {
-    color: #8799b2 !important;
-}
-
 [data-testid="stVerticalBlockBorderWrapper"] {
-    border-radius: 18px !important;
+    border-radius: 17px !important;
 }
 
-/* Responsive layout */
-@media(max-width: 768px) {
+/* Responsive adjustments */
+@media(max-width:780px) {
     .block-container {
-        padding: 12px 13px 28px !important;
+        padding: 14px 13px 30px !important;
     }
 
     .brandbar {
-        padding: 16px;
+        padding: 17px;
         margin-bottom: 18px;
     }
 
-    .brandbar strong {
+    .brand {
         font-size: 18px;
     }
 
-    .brandbar span {
-        font-size: 10px;
+    .brand-note {
+        font-size: 9px;
     }
 
     .task-card {
@@ -300,112 +316,111 @@ div[data-testid="stChatInput"] textarea::placeholder {
     .task-name {
         font-size: 14px;
     }
+
+    .metric {
+        padding: 11px;
+    }
+
+    .metric-number {
+        font-size: 21px;
+    }
 }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
-# -------------------------------------------------
+# ----------------------------------------
 # HELPERS
-# -------------------------------------------------
+# ----------------------------------------
 
 def due_label(value: str | None) -> str:
     if not value:
         return "No due date"
 
     try:
-        task_date = date.fromisoformat(value)
+        due = date.fromisoformat(value)
     except ValueError:
         return value
 
     today = datetime.now(TIMEZONE).date()
 
-    if task_date == today:
+    if due == today:
         return "Today"
 
-    if task_date == date.fromordinal(
-        today.toordinal() + 1
-    ):
+    if due == today + timedelta(days=1):
         return "Tomorrow"
 
-    return task_date.strftime("%d %b %Y")
+    return due.strftime("%d %b %Y")
 
 
-def render_task(task: dict) -> None:
+def task_card_html(task: dict) -> str:
+    """
+    Generate safe HTML for a task card.
+    Escape all user-created task content.
+    """
+
+    done = task["status"] == "Done"
+
+    pill = {
+        "High": "priority-high",
+        "Medium": "priority-medium",
+        "Low": "priority-low",
+    }.get(task["priority"], "priority-medium")
+
     title = escape(task["title"])
+
+    meta = escape(
+        f"#{task['id']} · "
+        f"{due_label(task.get('due_date'))} · "
+        f"{task['status']}"
+    )
+
     description = escape(
         task.get("description") or ""
     )
 
-    status = escape(task["status"])
-    priority = task["priority"]
-
-    priority_class = {
-        "High": "priority-high",
-        "Medium": "priority-medium",
-        "Low": "priority-low",
-    }.get(priority, "priority-medium")
-
-    done = status == "Done"
-
-    detail = (
+    description_html = (
         f'<div class="task-description">'
         f'{description}</div>'
         if description
         else ""
     )
 
-    st.markdown(f"""
-<div class="task-card">
-  <span class="task-dot {'done' if done else ''}">
-    {'✓' if done else '○'}
-  </span>
+    done_class = "is-done" if done else ""
+    icon = "✓" if done else "○"
 
-  <div class="task-main">
-    <div class="task-name {'done' if done else ''}">
-      {title}
-    </div>
-
-    <div class="task-meta">
-      #{int(task['id'])}
-      · {escape(due_label(task.get('due_date')))}
-      · {status}
-    </div>
-
-    {detail}
-  </div>
-
-  <span class="priority-pill {priority_class}">
-    {escape(priority)}
-  </span>
-</div>
-""", unsafe_allow_html=True)
+    return (
+        '<div class="task-card">'
+        f'<span class="task-status-icon {done_class}">{icon}</span>'
+        '<div class="task-main">'
+        f'<div class="task-name {done_class}">{title}</div>'
+        f'<div class="task-meta">{meta}</div>'
+        f'{description_html}'
+        '</div>'
+        f'<span class="priority-pill {pill}">'
+        f'{escape(task["priority"])}</span>'
+        '</div>'
+    )
 
 
-def render_message(
-    role: str,
-    content: str
-) -> None:
+def render_message(role: str, content: str) -> None:
 
     avatar = "👤" if role == "user" else "🤖"
 
     with st.chat_message(role, avatar=avatar):
 
         if role == "user":
-            st.markdown(
-                f'<div style="color:#1c3153;'
-                f'white-space:pre-wrap;'
-                f'overflow-wrap:anywhere">'
-                f'{escape(content)}</div>',
-                unsafe_allow_html=True,
+            st.html(
+                f'<p class="user-text">'
+                f'{escape(content)}</p>'
             )
         else:
             st.markdown(content)
 
 
-# -------------------------------------------------
-# INITIAL STATE
-# -------------------------------------------------
+# ----------------------------------------
+# INITIALIZATION
+# ----------------------------------------
 
 init_db()
 
@@ -415,116 +430,110 @@ if "chat_messages" not in st.session_state:
     )
 
 
-# -------------------------------------------------
+# ----------------------------------------
 # BRAND HEADER
-# -------------------------------------------------
+# ----------------------------------------
 
-st.markdown("""
-<div class="brandbar">
-  <strong>✦ SMARTASSIST</strong>
-  <span>AI TASK MANAGER</span>
-</div>
-""", unsafe_allow_html=True)
+st.html(
+    '<div class="brandbar">'
+    '<div class="brand">✦ SMARTASSIST</div>'
+    '<div class="brand-note">AI TASK MANAGER</div>'
+    '</div>'
+)
 
 
 left, right = st.columns(
-    [1.60, 1],
+    [1.55, 1],
     gap="large"
 )
 
 
-# -------------------------------------------------
-# TASK BOARD
-# -------------------------------------------------
+# ----------------------------------------
+# LEFT — TASK BOARD
+# ----------------------------------------
 
 with left:
 
-    st.markdown(
-        '<h1 class="page-heading">My tasks</h1>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        '<div class="subtitle">'
-        'Organize work by asking your AI assistant.'
-        '</div>',
-        unsafe_allow_html=True,
+    st.html(
+        '<div class="page-heading">My tasks</div>'
+        '<div class="page-subtitle">'
+        'Organize your day with SmartAssist AI.'
+        '</div>'
     )
 
     tasks = list_tasks()
 
-    done = sum(
-        task["status"] == "Done"
-        for task in tasks
-    )
-
     ongoing = sum(
-        task["status"] == "In progress"
-        for task in tasks
+        t["status"] == "In progress"
+        for t in tasks
     )
 
-    st.markdown(f"""
-<div class="stats">
-  <div>
-    <small>Total tasks</small>
-    <strong>{len(tasks)}</strong>
-  </div>
-  <div>
-    <small>In progress</small>
-    <strong>{ongoing}</strong>
-  </div>
-  <div>
-    <small>Completed</small>
-    <strong>{done}</strong>
-  </div>
-</div>
-""", unsafe_allow_html=True)
+    done = sum(
+        t["status"] == "Done"
+        for t in tasks
+    )
+
+    st.html(
+        '<div class="metric-strip">'
+        f'<div class="metric">'
+        f'<span class="metric-label">Total tasks</span>'
+        f'<span class="metric-number">{len(tasks)}</span>'
+        '</div>'
+        f'<div class="metric">'
+        f'<span class="metric-label">In progress</span>'
+        f'<span class="metric-number">{ongoing}</span>'
+        '</div>'
+        f'<div class="metric">'
+        f'<span class="metric-label">Completed</span>'
+        f'<span class="metric-number">{done}</span>'
+        '</div>'
+        '</div>'
+    )
 
     with st.container(border=True):
 
-        st.markdown(
-            f'<div class="section-head">'
-            f'<strong>Task board</strong>'
+        st.html(
+            '<div class="section-heading">'
+            '<span>Task board</span>'
             f'<span class="count-pill">'
             f'All tasks {len(tasks)}'
-            f'</span></div>',
-            unsafe_allow_html=True,
+            '</span></div>'
         )
 
-        if not tasks:
+        if tasks:
+            st.html(
+                '<div class="task-list">'
+                + "".join(
+                    task_card_html(t)
+                    for t in tasks
+                )
+                + '</div>'
+            )
+        else:
             st.info(
-                "No tasks yet. Tell the AI assistant "
-                "to create one."
+                "No tasks yet. Ask SmartAssist to create one!"
             )
 
-        for task in tasks:
-            render_task(task)
 
-
-# -------------------------------------------------
-# AI CHAT
-# -------------------------------------------------
+# ----------------------------------------
+# RIGHT — AI CHAT
+# ----------------------------------------
 
 with right:
 
     with st.container(border=True):
 
-        st.markdown(
+        st.html(
             '<div class="assistant-top">'
-            '✦ &nbsp; AI Assistant</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
+            '✦ &nbsp; AI Assistant'
+            '</div>'
             '<div class="assistant-sub">'
             'Manage everything with a message'
-            '</div>',
-            unsafe_allow_html=True,
+            '</div>'
         )
 
-        # Keeps the conversation above the input.
         chat_area = st.container(
-            height=455,
+            height=460,
             border=False,
         )
 
@@ -533,7 +542,7 @@ with right:
             if not st.session_state.chat_messages:
                 st.info(
                     'Try: "Create a high-priority task '
-                    'to finish the demo tomorrow."'
+                    'for tomorrow."'
                 )
 
             for item in st.session_state.chat_messages[-40:]:
@@ -542,7 +551,6 @@ with right:
                     item["content"],
                 )
 
-        # Native chat input: Enter sends.
         prompt = st.chat_input(
             "Type a task instruction and press Enter...",
             key="smartassist_chat_input",
@@ -554,7 +562,6 @@ with right:
             f"{len(get_enabled_tool_names())} approved tools"
         )
 
-        # Process immediately after submission.
         if prompt and prompt.strip():
 
             prompt = prompt.strip()
@@ -564,8 +571,6 @@ with right:
                 "content": prompt,
             })
 
-            # Draw new messages INSIDE chat_area.
-            # This appears before the LLM finishes.
             with chat_area:
 
                 render_message("user", prompt)
@@ -576,22 +581,18 @@ with right:
                 ):
 
                     with st.status(
-                        "SmartAssist AI is thinking...",
-                        expanded=True,
+                        "SmartAssist is working...",
+                        expanded=False,
                     ) as status:
 
-                        st.write(
-                            "Understanding your request "
-                            "and checking approved tools..."
-                        )
-
                         try:
-                            reply = run_turn(
+                            response = run_turn(
                                 prompt,
                                 thread_id=THREAD_ID,
                             )
 
                         except Exception:
+
                             logging.exception(
                                 "SmartAssist request failed"
                             )
@@ -599,33 +600,31 @@ with right:
                             status.update(
                                 label="Request failed",
                                 state="error",
-                                expanded=False,
                             )
 
-                            error_text = (
-                                "I couldn't complete that request. "
+                            message = (
+                                "I couldn't finish that request. "
                                 "Check the task board before retrying; "
-                                "a previous operation might have succeeded."
+                                "an earlier action may have succeeded."
                             )
 
-                            st.error(error_text)
+                            st.error(message)
 
                             st.session_state.chat_messages.append({
                                 "role": "assistant",
-                                "content": error_text,
+                                "content": message,
                             })
 
                         else:
+
                             status.update(
-                                label="Request finished",
+                                label="Done",
                                 state="complete",
                                 expanded=False,
                             )
 
-                            st.markdown(reply)
+                            st.markdown(response)
 
-                            # Reload saved conversation
-                            # and refresh the task board.
                             st.session_state.chat_messages = (
                                 load_chat_history(THREAD_ID)
                             )
