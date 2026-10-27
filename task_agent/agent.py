@@ -62,6 +62,7 @@ from .task_intelligence import (
     is_sort_audit_question,
     audit_last_priority_list,
     is_retryable_groq_json_error,
+    standalone_due_date,
 )
 
 
@@ -611,6 +612,72 @@ def build_graph(
             # Otherwise, process the message as a
             # new instruction and discard old context.
         
+        # Continue a rejected due-date edit only when
+        # the previous request identified one task ID.
+        parsed_followup_date = standalone_due_date(
+            latest,
+            today=datetime.now(
+                ZoneInfo("Asia/Dhaka")
+            ).date(),
+        )
+
+        if (
+            parsed_followup_date
+            and len(state["messages"]) >= 3
+        ):
+
+            previous_user = state["messages"][-3]
+            previous_ai = state["messages"][-2]
+
+            if (
+                isinstance(previous_user, HumanMessage)
+                and isinstance(previous_ai, AIMessage)
+                and isinstance(previous_user.content, str)
+                and isinstance(previous_ai.content, str)
+                and re.search(
+                    r"\b(update|set|change)\b",
+                    previous_user.content,
+                    re.I,
+                )
+                and re.search(
+                    r"\b(due date|deadline|schedule date)\b",
+                    previous_user.content,
+                    re.I,
+                )
+                and re.search(
+                    r"\b(date|deadline)\b",
+                    previous_ai.content,
+                    re.I,
+                )
+                and re.search(
+                    r"invalid|valid date format|"
+                    r"specific due date",
+                    previous_ai.content,
+                    re.I,
+                )
+            ):
+
+                previous_ids = mentioned_task_ids(
+                    previous_user.content
+                )
+
+                if len(previous_ids) == 1:
+
+                    pending = new_queue([
+                        Operation(
+                            action="update_task",
+                            due_date=parsed_followup_date,
+                        )
+                    ])
+
+                    # resolve_task() verifies this ID
+                    # still exists before modifying it.
+                    pending["pending_actions"][0][
+                        "_resolved_id"
+                    ] = next(iter(previous_ids))
+
+                    return pending
+
         # Verify the previously displayed result.
         # Do not ask the LLM to guess whether it was correct.
         if is_sort_audit_question(latest):

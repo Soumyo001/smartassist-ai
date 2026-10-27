@@ -326,26 +326,32 @@ def is_sort_audit_question(text: str) -> bool:
     )
 
 
+
 def audit_last_priority_list(messages: list[str]) -> str:
-    """
-    Check the order of actual task rows in the most recent
-    priority-sorted assistant response.
-    """
+    """Verify the most recent actual priority-sorted task list."""
 
     for message in reversed(messages):
 
+        # Match a real list heading, not a conversational
+        # sentence containing "sorted by priority".
         header = re.search(
-            r"Sorted by priority:\s*([^\r\n*]+)",
+            r"(?m)^[ \t]*\*?Sorted by priority:"
+            r"[ \t]*([^\r\n*]+)\*?[ \t]*$",
             message,
             re.I,
         )
 
-        if not header:
+        task_heading = re.search(
+            r"\*\*Your tasks \((\d+)\)\*\*",
+            message,
+        )
+
+        if not header or not task_heading:
             continue
 
         priorities = [
-            word.title()
-            for word in re.findall(
+            name.title()
+            for name in re.findall(
                 r"\b(High|Medium|Low)\b",
                 header.group(1),
                 re.I,
@@ -357,31 +363,41 @@ def audit_last_priority_list(messages: list[str]) -> str:
             or len(set(priorities)) != 3
         ):
             return (
-                "The previous sorting order wasn't clearly "
-                "recorded, so I can't verify it."
+                "The previous priority order "
+                "could not be verified."
             )
 
         actual = [
-            word.title()
-            for word in re.findall(
-                r"^\s*(?:To do|In progress|Done)\s*·\s*"
-                r"(High|Medium|Low)\s+priority\b",
+            name.title()
+            for name in re.findall(
+                r"(?m)^[ \t]*"
+                r"(?:To do|In progress|Done)"
+                r"[ \t]*·[ \t]*"
+                r"(High|Medium|Low)"
+                r"[ \t]+priority\b",
                 message,
-                re.I | re.M,
+                re.I,
             )
         ]
 
         label = " → ".join(priorities)
+        expected = int(task_heading.group(1))
 
-        if not actual:
+        if expected == 0:
             return (
-                f"The previous list declared **{label}**, "
-                "but contained no task rows to verify."
+                "The previous task list was empty, "
+                "so no ordering was needed."
+            )
+
+        if len(actual) != expected:
+            return (
+                f"The last list declared **{label}**, "
+                "but I couldn't verify all its task rows."
             )
 
         positions = [
-            priorities.index(priority)
-            for priority in actual
+            priorities.index(name)
+            for name in actual
         ]
 
         correctly_sorted = all(
@@ -394,19 +410,18 @@ def audit_last_priority_list(messages: list[str]) -> str:
 
         if correctly_sorted:
             return (
-                "**Yes.** I checked the actual tasks in the "
-                f"last displayed list. They follow **{label}**."
+                "**Yes.** I verified the task rows "
+                f"follow **{label}**."
             )
 
         return (
-            "**No.** The previous list claimed "
-            f"**{label}**, but its task rows did not "
-            "follow that order."
+            "**No.** The task rows do not follow "
+            f"the declared **{label}** order."
         )
 
     return (
-        "I don't see an earlier priority-sorted "
-        "list to verify."
+        "I couldn't find a previous priority-sorted "
+        "task list to verify."
     )
 
 
@@ -438,3 +453,73 @@ def is_retryable_groq_json_error(error: Exception) -> bool:
             )
         )
     )
+
+def standalone_due_date(
+    text: str,
+    today,
+) -> str | None:
+    """
+    Parse a standalone English date reply.
+
+    Only accepts an unambiguous day and month.
+    Does not silently guess next year for a past date.
+    """
+
+    import calendar
+    from datetime import date
+
+    month_pattern = (
+        r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|"
+        r"apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+        r"aug(?:ust)?|sep(?:tember)?|"
+        r"oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    )
+
+    match = re.fullmatch(
+        rf"\s*(\d{{1,2}})(?:st|nd|rd|th)?"
+        rf"\s+({month_pattern})"
+        r"(?:\s+(\d{4}))?\s*[.!]?\s*",
+        text,
+        re.I,
+    )
+
+    if not match:
+        return None
+
+    token = match.group(2).casefold()
+
+    month = next(
+        (
+            number
+            for number in range(1, 13)
+            if calendar.month_name[number]
+            .casefold()
+            .startswith(token[:3])
+        ),
+        None,
+    )
+
+    if month is None:
+        return None
+
+    explicit_year = match.group(3) is not None
+
+    year = (
+        int(match.group(3))
+        if explicit_year
+        else today.year
+    )
+
+    try:
+        parsed = date(
+            year,
+            month,
+            int(match.group(1)),
+        )
+    except ValueError:
+        return None
+
+    if not explicit_year and parsed < today:
+        return None
+
+    return parsed.isoformat()
