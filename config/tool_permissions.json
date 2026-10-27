@@ -1,0 +1,15 @@
+{
+  "list_tasks": "enabled",
+  "create_task": "enabled",
+  "update_task": "enabled",
+  "complete_task": "enabled",
+  "schedule_reminder": "enabled",
+  "create_workspace_file": "enabled",
+  "read_workspace_file": "enabled",
+  "overwrite_workspace_file": "approval_required",
+  "run_approved_project_test": "approval_required",
+  "delete_file": "disabled",
+  "execute_arbitrary_shell": "disabled",
+  "access_internet": "disabled",
+  "send_external_message": "disabled"
+}
