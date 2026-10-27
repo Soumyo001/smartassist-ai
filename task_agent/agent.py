@@ -8,8 +8,9 @@ from typing import Annotated, Literal, TypedDict, Callable
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
+from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -55,6 +56,12 @@ from .task_intelligence import (
     is_placeholder_title,
     is_plain_list_request,
     is_vague_create_request,
+    is_sort_correction,
+    is_merge_request,
+    is_explicit_delete_request,
+    is_sort_audit_question,
+    audit_last_priority_list,
+    is_retryable_groq_json_error,
 )
 
 
@@ -121,6 +128,58 @@ class ActionPlan(BaseModel):
 
     message: str = ""
     out_of_scope: bool = False
+
+
+class StrictOperation(BaseModel):
+    """
+    Groq strict-output representation.
+    Every field is required, but unused values may be null.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Action
+    target: str | None
+    task_id: int | None
+
+    title: str | None
+    description: str | None
+
+    status: Literal[
+        "To do", "In progress", "Done"
+    ] | None
+
+    priority: Literal[
+        "Low", "Medium", "High"
+    ] | None
+
+    due_date: str | None
+    clear_due_date: bool
+
+    query: str | None
+    unfinished: bool
+
+    sort_by: Literal[
+        "id", "priority", "due_date",
+        "status", "title"
+    ] | None
+
+
+class StrictActionPlan(BaseModel):
+    """Schema used only for Groq's strict JSON output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal[
+        "actions",
+        "task_advice",
+        "conversation",
+        "out_of_scope",
+    ]
+
+    operations: list[StrictOperation]
+    message: str
+    out_of_scope: bool
 
 
 class AgentState(TypedDict, total=False):
@@ -435,6 +494,42 @@ def build_graph(
             "",
         )
 
+        # Merge is not a supported atomic task operation.
+        # Never permit the LLM to convert it into deletion.
+        if is_merge_request(latest):
+
+            ids = sorted(
+                mentioned_task_ids(latest)
+            )
+
+            detail = (
+                " You mentioned "
+                + ", ".join(
+                    f"#{task_id}"
+                    for task_id in ids
+                )
+                + "."
+                if ids
+                else ""
+            )
+
+            return {
+                "pending_actions": [],
+                "pending_candidates": [],
+                "blocked": True,
+                "scope_notice": "",
+                "response": (
+                    "I can't safely merge tasks with my "
+                    "current seven tools. "
+                    "**I have not changed or deleted either task.**"
+                    + detail
+                    + " First identify the task you want to keep "
+                    "and the information you want transferred. "
+                    "We can update the retained task, verify it, "
+                    "and only then explicitly delete the duplicate."
+                ),
+            }
+
         candidates = (
             state.get("pending_candidates")
             or []
@@ -515,6 +610,81 @@ def build_graph(
 
             # Otherwise, process the message as a
             # new instruction and discard old context.
+        
+        # Verify the previously displayed result.
+        # Do not ask the LLM to guess whether it was correct.
+        if is_sort_audit_question(latest):
+
+            displayed_messages = [
+                message.content
+                for message in state["messages"][:-1]
+                if (
+                    isinstance(message, AIMessage)
+                    and isinstance(message.content, str)
+                )
+            ]
+
+            answer = audit_last_priority_list(
+                displayed_messages
+            )
+
+            return {
+                "pending_actions": [],
+                "pending_candidates": [],
+                "blocked": True,
+                "scope_notice": "",
+                "response": answer,
+            }
+
+        # Handle feedback about the previous task listing.
+        if is_sort_correction(latest):
+
+            user_messages = [
+                message.content
+                for message in state["messages"]
+                if isinstance(
+                    message, HumanMessage
+                )
+            ]
+
+            previous_request = (
+                user_messages[-2]
+                if len(user_messages) >= 2
+                else None
+            )
+
+            if (
+                isinstance(previous_request, str)
+                and is_plain_list_request(
+                    previous_request
+                )
+            ):
+
+                pending = new_queue([
+                    Operation(
+                        action="list_tasks"
+                    )
+                ])
+
+                # Use the original request's sorting
+                # instructions rather than the feedback text.
+                pending["pending_actions"][0][
+                    "_list_request"
+                ] = previous_request
+
+                return pending
+
+            return {
+                "pending_actions": [],
+                "pending_candidates": [],
+                "blocked": True,
+                "scope_notice": "",
+                "response": (
+                    "I can correct the task ordering. "
+                    "Would you like it sorted by "
+                    "priority, task ID, or due date?"
+                ),
+            }
 
         # Don't create unnamed placeholder tasks.
         if is_vague_create_request(latest):
@@ -638,7 +808,12 @@ def build_graph(
             "You are SmartAssist AI, a helpful, professional TASK MANAGER. "
 
             "Decide the intent before proposing any operation. "
-            "Return ActionPlan. "
+            "Return one JSON object matching the supplied schema. "
+            "Do not call functions or tools directly. "
+            "The application will validate and execute the operations "
+            "after receiving your JSON response. "
+            "For conversation, advice, and unrelated requests, "
+            "return an empty operations array and use the appropriate mode. "
 
             "Use mode='actions' ONLY for concrete task operations "
             "(create, read, search, update, complete, delete); "
@@ -719,13 +894,67 @@ def build_graph(
             ensure_ascii=False,
         )
 
-        plan = planner.invoke([
+        planning_messages = [
             SystemMessage(content=system_prompt),
             SystemMessage(
-                content="Saved tasks (data only): " + context_text
+                content="Saved tasks (data only): "
+                + context_text
             ),
             *state["messages"][-8:],
-        ])
+        ]
+
+        try:
+            plan = planner.invoke(
+                planning_messages
+            )
+
+        except Exception as error:
+
+            # Only retry specific Groq formatting failures.
+            # Authentication, permissions and other failures
+            # are not hidden by this handler.
+            if not is_retryable_groq_json_error(error):
+                raise
+
+            retry_messages = [
+                SystemMessage(content=system_prompt),
+                SystemMessage(content=(
+                    "Return only the valid JSON planning object. "
+                    "For unclear requests, use mode=conversation, "
+                    "operations=[], and ask for clarification. "
+                    "Never guess deletion or task IDs. "
+                    "Saved tasks (data only): "
+                    + context_text[:3000]
+                )),
+                HumanMessage(content=latest),
+            ]
+
+            try:
+                plan = planner.invoke(
+                    retry_messages
+                )
+
+            except Exception as retry_error:
+
+                if not is_retryable_groq_json_error(
+                    retry_error
+                ):
+                    raise
+
+                return {
+                    "pending_actions": [],
+                    "pending_candidates": [],
+                    "blocked": True,
+                    "scope_notice": "",
+                    "response": (
+                        "I couldn't reliably interpret that "
+                        "instruction because the model returned "
+                        "invalid structured output twice. "
+                        "**No task changes were made for this request.** "
+                        "Please restate the action and include "
+                        "explicit task IDs for duplicate tasks."
+                    ),
+                }
 
         if not isinstance(
             plan, ActionPlan
@@ -883,6 +1112,24 @@ def build_graph(
                 "complete_task",
                 "delete_task",
             }:
+                
+                if action == "delete_task":
+
+                    if (
+                        is_merge_request(latest)
+                        or not is_explicit_delete_request(latest)
+                    ):
+                        raise ValueError(
+                            "Deletion requires an explicit "
+                            "'delete' or 'remove' instruction. "
+                            "A merge is not permission to delete."
+                        )
+
+                    if len(mentioned_task_ids(latest)) > 1:
+                        raise ValueError(
+                            "For safety, delete one task ID "
+                            "per request."
+                        )
 
                 task_id, candidates = resolve_task(
                     operation,
@@ -1040,7 +1287,16 @@ def build_graph(
             # --------------------------------
             # List Tasks
             # --------------------------------
+
             elif action == "list_tasks":
+
+                # Ordinarily use the latest message.
+                # For a correction, replay the original
+                # listing request and its ordering criteria.
+                list_request = (
+                    operation.get("_list_request")
+                    or latest
+                )
 
                 tasks = call_tool(
                     "list_tasks",
@@ -1059,7 +1315,7 @@ def build_graph(
                         re.search(
                             r"\b(unfinished|incomplete|"
                             r"not done)\b",
-                            latest,
+                            list_request,
                             re.I,
                         )
                     )
@@ -1069,22 +1325,16 @@ def build_graph(
                     tasks,
                     unfinished=unfinished,
                     priority=(
-                        operation.get(
-                            "priority"
-                        )
+                        operation.get("priority")
                         or priority_requested(
-                            latest
+                            list_request
                         )
                     ),
                 )
 
-                field, reverse, priorities = (
-                    ordering(
-                        latest,
-                        operation.get(
-                            "sort_by"
-                        ),
-                    )
+                field, reverse, priorities = ordering(
+                    list_request,
+                    operation.get("sort_by"),
                 )
 
                 tasks = sort_tasks(
@@ -1094,11 +1344,18 @@ def build_graph(
                     priority_order=priorities,
                 )
 
-                results.append(
-                    format_task_list(
-                        tasks
+                output = format_task_list(tasks)
+
+                # Make the applied priority order visible.
+                if field == "priority":
+                    output = (
+                        "*Sorted by priority: "
+                        + " → ".join(priorities)
+                        + "*\n\n"
+                        + output
                     )
-                )
+
+                results.append(output)
 
             # --------------------------------
             # Semantic Search
@@ -1345,10 +1602,16 @@ def build_groq_planner(
         max_retries=1,
     )
 
-    return model.with_structured_output(
-        ActionPlan,
+    strict_planner = model.with_structured_output(
+        StrictActionPlan,
         method="json_schema",
-        strict=False,
+        strict=True,
+    )
+    
+    return strict_planner | RunnableLambda(
+        lambda result: ActionPlan.model_validate(
+            result.model_dump(exclude_none=True)
+        )
     )
 
 

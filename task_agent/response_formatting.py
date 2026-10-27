@@ -133,55 +133,131 @@ def ordering(
     message: str,
     suggested: str | None = None,
 ) -> tuple[str, bool, list[str]]:
-    """Return sort field, reverse flag, and priority rank order."""
+    """
+    Determine task display order.
+
+    Default priorities: High -> Medium -> Low.
+    Explicit relative instructions override this order.
+    """
 
     text = normal_words(message)
-    priorities = ["High", "Medium", "Low"]
 
+    default_priorities = [
+        "High", "Medium", "Low"
+    ]
+
+    priorities = list(default_priorities)
+
+    priority_labels = re.findall(
+        r"\b(high|medium|low)\b",
+        text,
+    )
+
+    # Handle natural relative ordering, including:
+    # "High priority task comes after Low priority tasks"
+    # "Low priority tasks should come before High"
+    # "Put Medium after Low"
+    relation = re.search(
+        r"\b(after|before)\b",
+        text,
+    )
+
+    pair = None
+
+    if relation:
+
+        preceding = re.findall(
+            r"\b(high|medium|low)\b",
+            text[:relation.start()],
+        )
+
+        following = re.findall(
+            r"\b(high|medium|low)\b",
+            text[relation.end():],
+        )
+
+        if (
+            preceding
+            and following
+            and preceding[-1] != following[0]
+        ):
+            moving = preceding[-1].title()
+            reference = following[0].title()
+
+            if relation.group(1) == "after":
+                pair = (reference, moving)
+            else:
+                pair = (moving, reference)
+
+    has_order_request = bool(
+        re.search(
+            r"\b(order|ordered|sort|sorted|"
+            r"rank|ranked|ascending|descending|"
+            r"first|last|then)\b",
+            text,
+        )
+    )
+
+    # Determine which field to sort by.
     if (
-        "priority" in text
-        and any(
-            x in text
-            for x in (
-                "order", "sort", "rank", "first",
-                "last", "ascending", "descending",
+        pair
+        or (
+            "priority" in text
+            and (
+                has_order_request
+                or "by priority" in text
             )
         )
-    ) or re.search(
-        r"\b(high|medium|low)\b.*\b(after|before)\b",
-        text,
-    ) or (
-        len(set(re.findall(
-            r"\b(high|medium|low)\b", text
-        ))) == 3
-        and any(x in text for x in ("order", "sort", "then"))
+        or (
+            len(set(priority_labels)) == 3
+            and has_order_request
+        )
     ):
         field = "priority"
 
     elif (
-        any(x in text for x in (
-            "due date", "deadline", "due first"
-        ))
-        and any(x in text for x in (
-            "order", "sort", "earliest", "latest", "first"
-        ))
+        any(
+            phrase in text
+            for phrase in (
+                "due date",
+                "deadline",
+                "due first",
+            )
+        )
+        and (
+            has_order_request
+            or "by due date" in text
+            or "by deadline" in text
+        )
     ):
         field = "due_date"
 
-    elif any(x in text for x in (
-        "alphabetically", "by name", "by title"
-    )):
+    elif any(
+        phrase in text
+        for phrase in (
+            "alphabetically",
+            "by name",
+            "by title",
+        )
+    ):
         field = "title"
 
-    elif any(x in text for x in (
-        "by status", "by progress"
-    )):
+    elif any(
+        phrase in text
+        for phrase in (
+            "by status",
+            "by progress",
+        )
+    ):
         field = "status"
 
-    elif re.search(
-        r"\b(by id|by number|numerically|ascending|"
-        r"descending|ordered|sorted|sort|order)\b",
-        text,
+    elif has_order_request or any(
+        phrase in text
+        for phrase in (
+            "by id",
+            "by number",
+            "numerically",
+        )
     ):
         field = "id"
 
@@ -189,74 +265,62 @@ def ordering(
         field = (
             suggested
             if suggested in {
-                "id", "priority", "due_date",
-                "title", "status",
+                "id",
+                "priority",
+                "due_date",
+                "title",
+                "status",
             }
             else "id"
         )
 
     if field == "priority":
 
-        # Conventional default: High -> Medium -> Low.
-        # Descending uses this default.
-        if re.search(
-            r"\b(ascending|lowest first|low to high)\b",
-            text,
+        if pair:
+            # Keep the requested priorities adjacent.
+            # Append any unmentioned priority afterward.
+            priorities = list(pair) + [
+                priority
+                for priority in default_priorities
+                if priority not in pair
+            ]
+
+        elif (
+            len(set(priority_labels)) == 3
+            and (
+                "then" in text
+                or "order" in text
+                or "sort" in text
+            )
         ):
-            priorities = ["Low", "Medium", "High"]
-
-        # Custom relative order:
-        # "Low comes after High" -> High, Low, Medium.
-        relative = re.search(
-            r"\b(high|medium|low)\s+"
-            r"(?:comes?\s+|is\s+)?"
-            r"(?:right\s+|immediately\s+)?"
-            r"(after|before)\s+"
-            r"(high|medium|low)\b",
-            text,
-        )
-
-        if relative:
-            moving, position, reference = relative.groups()
-            moving = moving.title()
-            reference = reference.title()
-
-            if moving != reference:
-                priorities.remove(moving)
-                reference_index = priorities.index(reference)
-                insert_at = reference_index + (
-                    position == "after"
-                )
-                priorities.insert(insert_at, moving)
-
-        else:
-            # Explicit order:
-            # "High then Low then Medium".
-            labels = [
-                match.group().title()
-                for match in re.finditer(
-                    r"\b(high|medium|low)\b",
-                    text,
+            # Example: "Low then High then Medium"
+            priorities = [
+                priority.title()
+                for priority in dict.fromkeys(
+                    priority_labels
                 )
             ]
 
-            unique = list(dict.fromkeys(labels))
+        elif re.search(
+            r"\b(ascending|lowest first|"
+            r"low to high)\b",
+            text,
+        ):
+            priorities = [
+                "Low", "Medium", "High"
+            ]
 
-            if len(unique) == 3 and any(
-                x in text
-                for x in (
-                    "order", "sort", "then", "first", "last"
-                )
-            ):
-                priorities = unique
-
-        # Do not reverse priority again.
+        # Direction is already represented by
+        # the explicit priority ranking.
         return "priority", False, priorities
 
-    reverse = bool(re.search(
-        r"\b(descending|reverse|newest|largest first)\b",
-        text,
-    ))
+    reverse = bool(
+        re.search(
+            r"\b(descending|reverse|newest|"
+            r"largest first)\b",
+            text,
+        )
+    )
 
     return field, reverse, priorities
 

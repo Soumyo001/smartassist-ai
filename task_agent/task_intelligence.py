@@ -214,8 +214,8 @@ def is_plain_list_request(text: str) -> bool:
 
     is_question = bool(
         re.match(
-            r"\s*(show|list|display|what are|"
-            r"which are|find all|how many)\b",
+            r"\s*(show|list|display|sort|order|"
+            r"what are|which are|find all|how many)\b",
             lower,
         )
     )
@@ -241,4 +241,200 @@ def is_plain_list_request(text: str) -> bool:
         is_question
         and mentions_tasks
         and not topical
+    )
+
+def is_sort_correction(message: str) -> bool:
+    """Detect feedback about an incorrectly ordered list."""
+
+    words = " ".join(
+        re.findall(r"\w+", message.casefold())
+    )
+
+    # A question about the previous order is not a
+    # request to replay the previous list.
+    if message.strip().endswith("?") and re.match(
+        r"^\s*(was|were|is|are|did|does|do|why|how)\b",
+        message,
+        re.I,
+    ):
+        return False
+
+    # A new sorting instruction is not correction feedback.
+    if re.match(
+        r"^(show|list|display|sort|order)\b",
+        words,
+    ):
+        return False
+
+    return bool(
+        re.search(
+            r"\b(wrong|incorrect|not|failed|"
+            r"isn|wasn|didn)\b",
+            words,
+        )
+        and re.search(
+            r"\b(order|ordered|ordere|"
+            r"sort|sorted|sorting|sequence)\b",
+            words,
+        )
+    )
+
+
+def is_merge_request(text: str) -> bool:
+    """A merge must never be silently converted into a delete."""
+    return bool(re.search(
+        r"\b(merge|merging|merged|combine|combining|consolidate)\b",
+        text,
+        re.I,
+    ))
+
+
+def is_explicit_delete_request(text: str) -> bool:
+    """Only explicit delete/remove language authorizes deletion."""
+    return bool(re.search(
+        r"\b(delete|remove)\b",
+        text,
+        re.I,
+    ))
+
+
+def is_sort_audit_question(text: str) -> bool:
+    """Detect questions about the accuracy of a previous sort."""
+    words = " ".join(
+        re.findall(r"\w+", text.casefold())
+    )
+
+    # Correction statements belong to the correction
+    # handler, which rebuilds the previous task list.
+    if is_sort_correction(text):
+        return False
+
+    return bool(
+        re.search(
+            r"\b(was|were|is|did|which|what)\b",
+            words,
+        )
+        and re.search(
+            r"\b(order|ordered|sorted|sorting|sequence)\b",
+            words,
+        )
+        and re.search(
+            r"\b(last|previous|prior|earlier|that|"
+            r"you|response|list|tasks)\b",
+            words,
+        )
+    )
+
+
+def audit_last_priority_list(messages: list[str]) -> str:
+    """
+    Check the order of actual task rows in the most recent
+    priority-sorted assistant response.
+    """
+
+    for message in reversed(messages):
+
+        header = re.search(
+            r"Sorted by priority:\s*([^\r\n*]+)",
+            message,
+            re.I,
+        )
+
+        if not header:
+            continue
+
+        priorities = [
+            word.title()
+            for word in re.findall(
+                r"\b(High|Medium|Low)\b",
+                header.group(1),
+                re.I,
+            )
+        ]
+
+        if (
+            len(priorities) != 3
+            or len(set(priorities)) != 3
+        ):
+            return (
+                "The previous sorting order wasn't clearly "
+                "recorded, so I can't verify it."
+            )
+
+        actual = [
+            word.title()
+            for word in re.findall(
+                r"^\s*(?:To do|In progress|Done)\s*·\s*"
+                r"(High|Medium|Low)\s+priority\b",
+                message,
+                re.I | re.M,
+            )
+        ]
+
+        label = " → ".join(priorities)
+
+        if not actual:
+            return (
+                f"The previous list declared **{label}**, "
+                "but contained no task rows to verify."
+            )
+
+        positions = [
+            priorities.index(priority)
+            for priority in actual
+        ]
+
+        correctly_sorted = all(
+            left <= right
+            for left, right in zip(
+                positions,
+                positions[1:],
+            )
+        )
+
+        if correctly_sorted:
+            return (
+                "**Yes.** I checked the actual tasks in the "
+                f"last displayed list. They follow **{label}**."
+            )
+
+        return (
+            "**No.** The previous list claimed "
+            f"**{label}**, but its task rows did not "
+            "follow that order."
+        )
+
+    return (
+        "I don't see an earlier priority-sorted "
+        "list to verify."
+    )
+
+
+def is_retryable_groq_json_error(error: Exception) -> bool:
+    """Recognize specific malformed structured-output errors."""
+
+    if type(error).__name__ != "BadRequestError":
+        return False
+
+    body = getattr(error, "body", None)
+    code = getattr(error, "code", None)
+
+    if isinstance(body, dict):
+        details = body.get("error", body)
+
+        if isinstance(details, dict):
+            code = details.get("code", code)
+
+    return (
+        code in {
+            "json_validate_failed",
+            "tool_use_failed",
+        }
+        or any(
+            value in str(error)
+            for value in (
+                "json_validate_failed",
+                "tool_use_failed",
+            )
+        )
     )
