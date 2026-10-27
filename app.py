@@ -532,6 +532,18 @@ with right:
             '</div>'
         )
 
+        reasoning_mode = st.selectbox(
+            "Reasoning effort",
+            options=["Low", "Medium", "High"],
+            index=1,
+            key="smartassist_reasoning_mode",
+            help=(
+                "Low: faster responses. "
+                "Medium: balanced reasoning. "
+                "High: more effort for complex task instructions."
+            ),
+        )
+
         chat_area = st.container(
             height=460,
             border=False,
@@ -581,14 +593,21 @@ with right:
                 ):
 
                     with st.status(
-                        "SmartAssist is working...",
-                        expanded=False,
+                        "SmartAssist AI is thinking...",
+                        expanded=True,
                     ) as status:
 
                         try:
+                            progress_line = st.empty()
+
+                            def report_progress(stage: str) -> None:
+                                progress_line.caption(stage)
+
                             response = run_turn(
                                 prompt,
                                 thread_id=THREAD_ID,
+                                reasoning_effort=reasoning_mode.lower(),
+                                on_progress=report_progress,
                             )
 
                         except Exception:

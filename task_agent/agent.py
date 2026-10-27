@@ -4,7 +4,7 @@ import re
 
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Literal, TypedDict, Callable
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -25,7 +25,7 @@ from langgraph.graph import (
 
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langchain_openrouter import ChatOpenRouter
+from langchain_groq import ChatGroq
 
 from .storage import (
     DB_PATH,
@@ -1307,26 +1307,40 @@ def build_graph(
     )
 
 
-def build_openrouter_planner():
+
+
+def build_groq_planner(
+    reasoning_effort: str | None = None
+):
+    """Create a Groq planner with validated reasoning effort."""
 
     load_dotenv()
 
-    api_key = os.getenv(
-        "OPENROUTER_API_KEY"
-    )
+    effort = (
+        reasoning_effort
+        or os.getenv("GROQ_REASONING_EFFORT", "medium")
+    ).strip().lower()
+
+    if effort not in {"low", "medium", "high"}:
+        raise ValueError(
+            "Reasoning effort must be low, medium or high."
+        )
+
+    api_key = os.getenv("GROQ_API_KEY")
 
     if not api_key:
         raise RuntimeError(
-            "Set OPENROUTER_API_KEY in .env"
+            "Set GROQ_API_KEY in your .env file."
         )
 
-    model = ChatOpenRouter(
+    model = ChatGroq(
         model=os.getenv(
-            "OPENROUTER_MODEL",
-            "openai/gpt-4o-mini",
+            "GROQ_MODEL",
+            "openai/gpt-oss-20b",
         ),
         api_key=api_key,
         temperature=0,
+        reasoning_effort=effort,
         max_retries=1,
     )
 
@@ -1336,11 +1350,14 @@ def build_openrouter_planner():
     )
 
 
+
 def run_turn(
     text: str,
     thread_id: str = "main",
     *,
     planner=None,
+    reasoning_effort: str | None = None,
+    on_progress: Callable[[str], None] | None = None,
     db_path: Path = DB_PATH,
     checkpoint_path: Path | None = None,
     permissions_path: Path = PERMISSIONS_PATH,
@@ -1348,19 +1365,24 @@ def run_turn(
 ) -> str:
 
     if not text.strip():
-        raise ValueError(
-            "Message must not be empty"
-        )
+        raise ValueError("Message must not be empty")
 
     checkpoint_path = (
         checkpoint_path
-        or DATA_DIR
-        / "agent_checkpoints.sqlite3"
+        or DATA_DIR / "agent_checkpoints.sqlite3"
     )
 
     checkpoint_path.parent.mkdir(
         parents=True,
         exist_ok=True,
+    )
+
+    active_planner = (
+        planner
+        if planner is not None
+        else build_groq_planner(
+            reasoning_effort=reasoning_effort
+        )
     )
 
     with SqliteSaver.from_conn_string(
@@ -1369,30 +1391,88 @@ def run_turn(
 
         graph = build_graph(
             checkpointer=saver,
-            planner=(
-                planner
-                or build_openrouter_planner()
-            ),
+            planner=active_planner,
             db_path=db_path,
             permissions_path=permissions_path,
             chroma_path=chroma_path,
         )
 
-        outcome = graph.invoke(
-            {
-                "messages": [
-                    HumanMessage(
-                        content=text
-                    )
-                ],
-                "results": [],
-                "response": "",
-            },
-            config={
-                "configurable": {
-                    "thread_id": thread_id
-                }
-            },
-        )
+        inputs = {
+            "messages": [
+                HumanMessage(content=text)
+            ],
+            "results": [],
+            "response": "",
+        }
+
+        config = {
+            "configurable": {
+                "thread_id": thread_id
+            }
+        }
+
+        # Preserve existing behavior for CLI and tests.
+        if on_progress is None:
+
+            outcome = graph.invoke(
+                inputs,
+                config=config,
+            )
+
+        else:
+            # Stream real graph node completions.
+            on_progress("Understanding your request...")
+
+            for event in graph.stream(
+                inputs,
+                config=config,
+                stream_mode="updates",
+            ):
+
+                if "interpret" in event:
+
+                    update = event["interpret"] or {}
+
+                    if update.get("pending_candidates"):
+                        on_progress(
+                            "Several tasks match. "
+                            "Preparing a clarification..."
+                        )
+
+                    elif (
+                        update.get("pending_actions")
+                        and not update.get("blocked")
+                    ):
+                        on_progress(
+                            "Task plan ready. "
+                            "Checking authorized actions..."
+                        )
+
+                    else:
+                        on_progress(
+                            "Preparing a response..."
+                        )
+
+                elif "execute" in event:
+
+                    update = event["execute"] or {}
+
+                    if update.get("pending_candidates"):
+                        on_progress(
+                            "A task needs clarification "
+                            "before making changes..."
+                        )
+
+                    else:
+                        on_progress(
+                            "An approved task operation finished. "
+                            "Checking the next step..."
+                        )
+
+                elif "finish" in event:
+                    on_progress("Response ready.")
+
+            # The checkpoint holds the completed graph state.
+            outcome = graph.get_state(config).values
 
     return outcome["response"]
