@@ -3,7 +3,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "taskflow.sqlite3"
+DB_PATH = DATA_DIR / "smartassist.sqlite3"
 
 
 def init_db(path: Path = DB_PATH) -> None:
@@ -49,11 +49,16 @@ def list_tasks(path: Path = DB_PATH) -> list[dict]:
         connection.row_factory = sqlite3.Row
 
         rows = connection.execute(
-            "SELECT * FROM tasks ORDER BY "
-            "CASE status "
-            "WHEN 'To do' THEN 0 "
-            "WHEN 'In progress' THEN 1 "
-            "ELSE 2 END, id DESC"
+            """
+            SELECT * FROM tasks
+            ORDER BY
+                CASE status
+                    WHEN 'To do' THEN 0
+                    WHEN 'In progress' THEN 1
+                    ELSE 2
+                END,
+                id DESC
+            """
         ).fetchall()
 
     return [dict(row) for row in rows]

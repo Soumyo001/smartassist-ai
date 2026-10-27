@@ -4,7 +4,7 @@ from task_agent.storage import init_db, list_tasks
 
 
 st.set_page_config(
-    page_title="TaskFlow",
+    page_title="SmartAssist AI",
     page_icon="✅",
     layout="wide"
 )
@@ -41,7 +41,7 @@ st.markdown("""
 </style>
 
 <div class="taskflow-header">
-    <strong>TASKFLOW</strong>
+    <strong>SMARTASSIST</strong>
     <span>AI TASK MANAGER</span>
 </div>
 """, unsafe_allow_html=True)

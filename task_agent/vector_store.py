@@ -17,5 +17,5 @@ def get_task_collection():
     )
 
     return client.get_or_create_collection(
-        name="taskflow_tasks"
+        name="smartassist_tasks"
     )
