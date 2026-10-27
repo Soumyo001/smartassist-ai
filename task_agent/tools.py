@@ -1,4 +1,3 @@
-
 import json
 from pathlib import Path
 from typing import Literal
@@ -6,6 +5,8 @@ from typing import Literal
 from langchain_core.tools import tool
 
 from . import storage
+from . import vector_store
+
 from .tool_policy import (
     PERMISSIONS_PATH,
     get_enabled_tool_names,
@@ -15,7 +16,8 @@ from .tool_policy import (
 
 def build_allowed_tools(
     db_path: Path = storage.DB_PATH,
-    permissions_path: Path = PERMISSIONS_PATH
+    permissions_path: Path = PERMISSIONS_PATH,
+    chroma_path: Path | None = None
 ):
     def check(name):
         require_allowed(name, permissions_path)
@@ -122,23 +124,64 @@ def build_allowed_tools(
 
     @tool("complete_task")
     def complete_task_tool(task_id: int) -> str:
-        """Mark the task with this integer ID as Done."""
+        """Mark a task as Done using its integer ID."""
 
         check("complete_task")
 
         return json.dumps(
-            storage.complete_task(task_id, path=db_path)
+            storage.complete_task(
+                task_id,
+                path=db_path
+            )
         )
 
     @tool("delete_task")
     def delete_task_tool(task_id: int) -> str:
-        """Delete a task using its resolved, unambiguous integer ID."""
+        """Delete a task using its resolved, unambiguous ID."""
 
         check("delete_task")
 
         return json.dumps(
-            storage.delete_task(task_id, path=db_path)
+            storage.delete_task(
+                task_id,
+                path=db_path
+            )
         )
+
+    @tool("search_tasks")
+    def search_tasks_tool(
+        query: str,
+        status: Literal[
+            "To do", "In progress", "Done"
+        ] | None = None,
+        limit: int = 5,
+    ) -> str:
+        """
+        Find related tasks using semantic similarity.
+
+        Use this when the user references a task by
+        topic, meaning, description, or approximate name.
+
+        For unfinished tasks, search both To do and
+        In progress, or search without a status filter
+        and exclude Done.
+
+        Search results contain stable task IDs.
+        A search match is not permission to modify
+        an ambiguous task.
+        """
+
+        check("search_tasks")
+
+        matches = vector_store.search_tasks(
+            query=query,
+            status=status,
+            limit=limit,
+            db_path=db_path,
+            chroma_path=chroma_path
+        )
+
+        return json.dumps(matches)
 
     registry = {
         t.name: t
@@ -149,6 +192,7 @@ def build_allowed_tools(
             update_task_tool,
             complete_task_tool,
             delete_task_tool,
+            search_tasks_tool,
         )
     }
 

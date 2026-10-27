@@ -3,6 +3,7 @@ from pathlib import Path
 
 from .storage import BASE_DIR
 
+
 PERMISSIONS_PATH = (
     BASE_DIR / "config" / "tool_permissions.json"
 )
@@ -13,7 +14,8 @@ KNOWN_TOOLS = frozenset({
     "get_task",
     "update_task",
     "complete_task",
-    "delete_task"
+    "delete_task",
+    "search_tasks",
 })
 
 

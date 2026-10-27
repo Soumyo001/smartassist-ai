@@ -5,6 +5,7 @@
     "get_task",
     "update_task",
     "complete_task",
-    "delete_task"
+    "delete_task",
+    "search_tasks"
   ]
 }
