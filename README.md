@@ -108,8 +108,6 @@ python chat_cli.py
 python -m pytest -q
 ```
 
-**Latest development result:** `76 passed` on October 28, 2026. This is the result of the developer's local test run, not a guarantee that every external API call will succeed.
-
 Optionally, verify live Groq structured output:
 
 ```bash
