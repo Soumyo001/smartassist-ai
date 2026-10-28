@@ -10,6 +10,7 @@ from task_agent.response_formatting import format_task_list
 from task_agent.task_intelligence import (
     audit_last_priority_list,
     standalone_due_date,
+    mentioned_task_ids,
 )
 
 
@@ -433,3 +434,198 @@ def test_date_followup_after_groq_double_failure(tmp_path):
 
     # No additional Groq invocation for the follow-up.
     assert planner.calls == 2
+
+
+def test_date_followup_after_conversational_clarification(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "update_task",
+        ]
+    }))
+
+    target = create_task(
+        title="QA Date Target",
+        due_date="2026-11-10",
+        path=db,
+    )
+
+    control = create_task(
+        title="QA Date Control",
+        due_date="2026-11-20",
+        path=db,
+    )
+
+    class ClarificationPlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            return ActionPlan(
+                mode="conversation",
+                message=(
+                    "I'm not sure what you mean by setting "
+                    'the due date to "NEVER". '
+                    "Do you want to remove the due date "
+                    "entirely, or set it to a specific date?"
+                ),
+            )
+
+    planner = ClarificationPlanner()
+
+    args = {
+        "planner": planner,
+        "thread_id": "date-clarification-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    first = run_turn(
+        f"Update task #{target['id']} due date to NEVER",
+        **args,
+    )
+
+    assert "specific date" in first
+
+    second = run_turn(
+        "18th November",
+        **args,
+    )
+
+    tasks = {
+        task["id"]: task
+        for task in list_tasks(db)
+    }
+
+    assert "Task updated" in second
+    assert tasks[target["id"]]["due_date"] == "2026-11-18"
+    assert tasks[control["id"]]["due_date"] == "2026-11-20"
+
+    assert planner.calls == 1
+
+
+def test_multiple_deletions_are_blocked_once(tmp_path):
+    from task_agent.task_intelligence import mentioned_task_ids
+
+    assert mentioned_task_ids(
+        "delete task #17 and #18"
+    ) == {17, 18}
+
+    assert mentioned_task_ids(
+        "remove task ID 1,2,3"
+    ) == {1, 2, 3}
+
+    assert mentioned_task_ids(
+        "set ID 15's due date 2026-11-10"
+    ) == {15}
+
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    first = create_task(
+        title="Alpha",
+        path=db,
+    )
+
+    second = create_task(
+        title="Beta",
+        path=db,
+    )
+
+    class MultiDeletePlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            return ActionPlan(
+                operations=[
+                    Operation(
+                        action="delete_task",
+                        target="Alpha",
+                    ),
+                    Operation(
+                        action="delete_task",
+                        target="Beta",
+                    ),
+                ]
+            )
+
+    planner = MultiDeletePlanner()
+
+    args = {
+        "planner": planner,
+        "thread_id": "multi-delete-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    # Explicitly named IDs: block before planning.
+    reply = run_turn(
+        f"delete task #{first['id']} "
+        f"and #{second['id']}",
+        **args,
+    )
+
+    assert reply.count("For safety") == 1
+    assert "No tasks were deleted" in reply
+    assert planner.calls == 0
+
+    # Comma-separated ID list: also block.
+    reply = run_turn(
+        f"remove task ID {first['id']},{second['id']}",
+        **args,
+    )
+
+    assert reply.count("For safety") == 1
+    assert planner.calls == 0
+
+    # Two named tasks: block before planning.
+    reply = run_turn(
+        "remove task Alpha and task Beta",
+        **args,
+    )
+
+    assert reply.count("For safety") == 1
+    assert planner.calls == 0
+
+    # An ambiguous model-generated two-delete plan
+    # must also be rejected as a single response.
+    reply = run_turn(
+        "remove Alpha and Beta",
+        **args,
+    )
+
+    assert reply.count("For safety") == 1
+    assert planner.calls == 1
+
+    remaining = {
+        task["id"]
+        for task in list_tasks(db)
+    }
+
+    assert remaining == {
+        first["id"],
+        second["id"],
+    }

@@ -354,6 +354,23 @@ def build_graph(
             ),
         }
 
+    def reject_bulk_delete():
+        """Reject multi-task deletion as one safe response."""
+
+        return {
+            "pending_actions": [],
+            "pending_candidates": [],
+            "results": [],
+            "blocked": True,
+            "scope_notice": "",
+            "response": (
+                "For safety, I can delete only one task "
+                "per request. **No tasks were deleted.** "
+                "Please send a separate delete instruction "
+                "for each task using its #ID."
+            ),
+        }
+
     # ---------------------------------------
     # TASK ID RESOLUTION
     # ---------------------------------------
@@ -531,6 +548,34 @@ def build_graph(
                 ),
             }
 
+        # Do not send explicit bulk-delete requests
+        # to the planner or execute any deletion.
+        if is_explicit_delete_request(latest):
+
+            delete_ids = mentioned_task_ids(latest)
+
+            delete_all = re.search(
+                r"\b(?:all|every)\s+(?:the\s+)?tasks\b",
+                latest,
+                re.I,
+            )
+
+            multiple_named_tasks = re.search(
+                r"\b(?:delete|remove)\b"
+                r"[^\n.!?]*\btask\b"
+                r"[^\n.!?]*\band\s+"
+                r"(?:the\s+)?task\b",
+                latest,
+                re.I,
+            )
+
+            if (
+                len(delete_ids) > 1
+                or delete_all
+                or multiple_named_tasks
+            ):
+                return reject_bulk_delete()
+
         candidates = (
             state.get("pending_candidates")
             or []
@@ -651,7 +696,7 @@ def build_graph(
                 )
                 and re.search(
                     r"invalid|valid date format|"
-                    r"specific due date|"
+                    r"specific (?:due )?date|"
                     r"due_date must use YYYY-MM-DD",
                     previous_ai.content,
                     re.I,
@@ -1062,6 +1107,14 @@ def build_graph(
             plan = ActionPlan.model_validate(
                 plan
             )
+
+        # A model-generated plan must not bypass
+        # the one-deletion-per-request rule.
+        if sum(
+            op.action == "delete_task"
+            for op in plan.operations
+        ) > 1:
+            return reject_bulk_delete()
 
         if len(plan.operations) > 8:
             return {

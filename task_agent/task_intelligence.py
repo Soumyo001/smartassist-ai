@@ -11,19 +11,53 @@ def normalized_title(value: str) -> str:
 
 def mentioned_task_ids(text: str) -> set[int]:
     """
-    Recognize explicit database IDs:
-    #8, $8, task 8, task #8.
+    Extract explicitly referenced task IDs.
+
+    Supports:
+      #17, $17, task 17, task #17
+      ID 17, task ID 17
+      task ID 1,2,3
+      task #17 and #18
+
+    Does not interpret ISO dates as task IDs.
     """
-    return {
-        int(match.group(1))
-        for match in re.finditer(
-            r"(?<!\w)(?:[#\$]\s*|"
-            r"\btask\s*(?:id\s*)?[#\$]?\s*)"
-            r"(\d+)(?!\d)",
-            text,
-            flags=re.I,
-        )
-    }
+
+    anchor = (
+        r"(?<!\w)(?:[#\$]\s*|"
+        r"\b(?:task\s+)?ids?\s*[#\$]?\s*|"
+        r"\btask\s*[#\$]?\s*)"
+        r"(\d+)(?![\w-])"
+    )
+
+    continuation = (
+        r"\s*(?:,|\band\b)\s*"
+        r"(?:(?:task\s+)?ids?\s*|task\s*)?"
+        r"[#\$]?\s*(\d+)(?![\w-])"
+    )
+
+    found = set()
+
+    for match in re.finditer(anchor, text, re.I):
+        found.add(int(match.group(1)))
+
+        position = match.end()
+
+        # Additional IDs must follow an explicit
+        # reference and a list separator.
+        while True:
+            next_match = re.match(
+                continuation,
+                text[position:],
+                re.I,
+            )
+
+            if next_match is None:
+                break
+
+            found.add(int(next_match.group(1)))
+            position += next_match.end()
+
+    return found
 
 
 def selected_candidate(
