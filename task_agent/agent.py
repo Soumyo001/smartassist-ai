@@ -645,13 +645,14 @@ def build_graph(
                     re.I,
                 )
                 and re.search(
-                    r"\b(date|deadline)\b",
+                    r"\b(due_date|date|deadline)\b",
                     previous_ai.content,
                     re.I,
                 )
                 and re.search(
                     r"invalid|valid date format|"
-                    r"specific due date",
+                    r"specific due date|"
+                    r"due_date must use YYYY-MM-DD",
                     previous_ai.content,
                     re.I,
                 )
@@ -1008,6 +1009,38 @@ def build_graph(
                 ):
                     raise
 
+                # If Groq fails twice on an explicitly
+                # invalid due-date instruction, return
+                # a date-specific rejection instead of
+                # losing the context in a generic error.
+                if (
+                    re.search(
+                        r"\b(update|set|change)\b",
+                        latest,
+                        re.I,
+                    )
+                    and re.search(
+                        r"\b(?:due[\s_-]*date|deadline|"
+                        r"schedule[\s_-]*date)\s+"
+                        r"(?:to|as)\s+never\b",
+                        latest,
+                        re.I,
+                    )
+                ):
+                    return {
+                        "pending_actions": [],
+                        "pending_candidates": [],
+                        "blocked": True,
+                        "scope_notice": "",
+                        "response": (
+                            "Could not update_task: "
+                            "Invalid due date 'NEVER'. "
+                            "Please provide a specific due date "
+                            "such as 16th November or YYYY-MM-DD. "
+                            "No task changes were made."
+                        ),
+                    }
+
                 return {
                     "pending_actions": [],
                     "pending_candidates": [],
@@ -1223,6 +1256,30 @@ def build_graph(
                 }
 
                 if action == "update_task":
+                    # Do not let the LLM reinterpret a literal
+                    # invalid date as a request to clear the date.
+                    # A genuine "clear/remove due date" request
+                    # remains supported.
+
+                    if (
+                        re.search(
+                            r"\b(?:due[\s_-]*date|deadline|"
+                            r"schedule[\s_-]*date)\s+"
+                            r"(?:to|as)\s+never\b",
+                            latest,
+                            re.I,
+                        )
+                        and (
+                            operation.get("clear_due_date")
+                            or operation.get("due_date") != "NEVER"
+                        )
+                    ):
+                        raise ValueError(
+                            "Invalid due date 'NEVER'. "
+                            "Please provide a specific due date "
+                            "such as 16th November or YYYY-MM-DD. "
+                            "No task changes were made."
+                        )
 
                     for field in (
                         "title",
