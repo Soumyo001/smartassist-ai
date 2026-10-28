@@ -204,33 +204,48 @@ def normalize(text: str) -> str:
     return normal_words(text)
 
 
-def sort_priority_then_newest_date(
+def sort_priority_then_date(
     tasks: list[dict],
     request: str,
     field: str,
     priorities: list[str],
 ) -> list[dict]:
-    """Apply newest due date first within priority groups."""
+    """Apply a secondary due-date sort within priority groups."""
 
-    date_descending = re.search(
+    newest_first = bool(re.search(
         r"\b(?:due\s+)?dates?\b.{0,50}\bdescending\b"
         r"|\b(?:latest|newest)\s+(?:due\s+)?dates?\s+first\b",
         request,
         re.I,
-    )
+    ))
 
-    if field != "priority" or not date_descending:
+    earliest_first = bool(re.search(
+        r"\b(?:due\s+)?dates?\b.{0,50}\bascending\b"
+        r"|\b(?:earliest|soonest|urgent)\s+"
+        r"(?:due\s+)?dates?\s+first\b",
+        request,
+        re.I,
+    ))
+
+    # No secondary date order requested, or conflicting
+    # directions: preserve the existing sort.
+    if field != "priority" or newest_first == earliest_first:
         return tasks
 
-    # Stable sort: newest dates first, undated last.
-    by_date = sorted(
-        tasks,
-        key=lambda task: task.get("due_date") or "",
-        reverse=True,
+    # Sort dated tasks in the requested direction.
+    dated = sorted(
+        (task for task in tasks if task.get("due_date")),
+        key=lambda task: task["due_date"],
+        reverse=newest_first,
     )
 
-    # Stable priority sort preserves date order
-    # inside each priority group.
+    # Undated tasks always appear last within their group.
+    by_date = dated + [
+        task for task in tasks
+        if not task.get("due_date")
+    ]
+
+    # Stable priority sorting retains the due-date order.
     ranks = {
         priority: index
         for index, priority in enumerate(priorities)
@@ -1772,7 +1787,7 @@ def build_graph(
                     priority_order=priorities,
                 )
 
-                tasks = sort_priority_then_newest_date(
+                tasks = sort_priority_then_date(
                     tasks,
                     list_request,
                     field,
@@ -1876,7 +1891,7 @@ def build_graph(
                         priority_order=priorities,
                     )
 
-                    tasks = sort_priority_then_newest_date(
+                    tasks = sort_priority_then_date(
                         tasks,
                         latest,
                         field,

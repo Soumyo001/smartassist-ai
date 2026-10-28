@@ -1769,3 +1769,126 @@ def test_priority_then_date_descending_list(tmp_path):
         ordinary.index(f"#{low_october['id']}")
         < ordinary.index(f"#{low_november['id']}")
     )
+
+
+def test_priority_then_urgent_date_first(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": ["list_tasks"]
+    }))
+
+    # Deliberately create November BEFORE October.
+    # This catches accidental sorting by task ID.
+    low_november = create_task(
+        title="Low November",
+        status="Done",
+        priority="Low",
+        due_date="2026-11-16",
+        path=db,
+    )
+
+    low_october = create_task(
+        title="Low October",
+        status="Done",
+        priority="Low",
+        due_date="2026-10-28",
+        path=db,
+    )
+
+    low_undated = create_task(
+        title="Low Undated",
+        status="Done",
+        priority="Low",
+        path=db,
+    )
+
+    high = create_task(
+        title="High October",
+        status="Done",
+        priority="High",
+        due_date="2026-10-28",
+        path=db,
+    )
+
+    medium = create_task(
+        title="Medium Undated",
+        status="Done",
+        priority="Medium",
+        path=db,
+    )
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Plain listing must not call Groq"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "urgent-date-sort-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    prefix = (
+        "show all completed tasks in order: "
+        "high -> low -> medium "
+    )
+
+    def verify_order(result, expected_tasks):
+        assert "**Your tasks (5)**" in result
+
+        positions = [
+            result.index(f"#{task['id']}")
+            for task in expected_tasks
+        ]
+
+        assert positions == sorted(positions)
+
+    # Earlier dates should come first within Low priority.
+    for instruction in (
+        "with urgent dates first",
+        "with earliest date first",
+        "with dates in ascending order",
+    ):
+        result = run_turn(prefix + instruction, **args)
+
+        verify_order(result, [
+            high,
+            low_october,
+            low_november,
+            low_undated,
+            medium,
+        ])
+
+    # Newest-first sorting must remain correct.
+    for instruction in (
+        "with latest date first",
+        "with dates in descending order",
+    ):
+        result = run_turn(prefix + instruction, **args)
+
+        verify_order(result, [
+            high,
+            low_november,
+            low_october,
+            low_undated,
+            medium,
+        ])
+
+    # Without date instructions, the old priority
+    # sorting behavior must remain unchanged.
+    ordinary = run_turn(
+        prefix.strip(),
+        **args,
+    )
+
+    assert (
+        ordinary.index(f"#{low_november['id']}")
+        < ordinary.index(f"#{low_october['id']}")
+    )
