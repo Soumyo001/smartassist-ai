@@ -57,6 +57,11 @@ header[data-testid="stHeader"],
     padding: 22px 27px;
     margin-bottom: 25px;
     box-shadow: 0 15px 32px rgba(21,42,77,.13);
+    position: relative;
+    z-index: 2;
+    isolation: isolate;
+    overflow: hidden;
+    border: 0 !important;
 }
 
 .brand {
@@ -290,8 +295,31 @@ div[data-testid="stChatInput"] {
     border-radius: 17px !important;
 }
 
-/* Responsive adjustments */
-@media(max-width:780px) {
+/* Responsive adjustments: keep chat easy to reach on phones and tablets. */
+@media(max-width:900px) {
+    /* This app has one st.columns() row: board (first) + chat (second).
+       Stack it and place the primary chat control before the long board. */
+    div[data-testid="stHorizontalBlock"] {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 18px !important;
+    }
+
+    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+        flex: 1 1 auto !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:first-child {
+        order: 2;
+    }
+
+    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:last-child {
+        order: 1;
+    }
+
     .block-container {
         padding: 14px 13px 30px !important;
     }
@@ -547,7 +575,7 @@ with right:
         )
 
         chat_area = st.container(
-            height=460,
+            height=400,
             border=False,
         )
 
