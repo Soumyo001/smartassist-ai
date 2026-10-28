@@ -1137,7 +1137,7 @@ def build_graph(
             topic = re.split(
                 r"\s*,?\s+(?:in\s+(?:the\s+)?order|"
                 r"(?:sorted|ordered)\s+by\s+priority)"
-                r"\s*:?\s*(?=low\b|medium\b|high\b)",
+                r"\s*:?\s*(?=low\b|medium\b|high\b|hight\b)",
                 topic,
                 maxsplit=1,
                 flags=re.I,
@@ -1155,9 +1155,9 @@ def build_graph(
                     status = "In progress"
 
                 elif re.search(
-                    r"\b(?:done|completed)\s+tasks?\b"
+                    r"\b(?:done|completed|finished)\s+tasks?\b"
                     r"|\btasks?\s+(?:that\s+are\s+)?"
-                    r"(?:done|completed)\b",
+                    r"(?:done|completed|finished)\b",
                     latest,
                     re.I,
                 ):
@@ -1951,11 +1951,20 @@ def build_graph(
                 # a simple list request bypasses the LLM.
                 requested_status = operation.get("status")
 
+                negated_done = bool(re.search(
+                    r"\bnot\s+(?:done|completed|finished)\b",
+                    list_request,
+                    re.I,
+                ))
+
                 for status, term in (
                     ("In progress", r"in[\s-]+progress"),
                     ("To do", r"to[\s-]+do"),
-                    ("Done", r"done|completed"),
+                    ("Done", r"done|completed|finished"),
                 ):
+                    if status == "Done" and negated_done:
+                        continue
+
                     if re.search(
                         rf"\b(?:{term})\s+tasks?\b"
                         rf"|\btasks?\s+(?:that\s+are\s+)?"
@@ -1981,7 +1990,7 @@ def build_graph(
                     or bool(
                         re.search(
                             r"\b(unfinished|incomplete|pending|"
-                            r"not done)\b",
+                            r"not done|not completed|not finished)\b",
                             list_request,
                             re.I,
                         )

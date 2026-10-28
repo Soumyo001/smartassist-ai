@@ -118,21 +118,27 @@ python verify_groq.py
 
 This optional verification **calls the real Groq API**, requires a valid key, and counts toward the account's API usage. The regular pytest suite primarily uses isolated fixtures and simulated planners rather than relying on live Groq requests.
 
-## Five demonstration prompts
+## Five Vibe-Coding Prompts and Iterative Improvements
 
-Use these prompts to demonstrate the assignment's core requirements. For operations involving existing tasks, make sure the named task exists on the board; replace ambiguous names with actual task IDs when necessary.
+During development, I used an AI coding assistant to investigate real failures, generate targeted code changes, and design regression tests. The prompts below are condensed from actual debugging conversations. Each change was reviewed and tested rather than accepted without verification.
 
-| # | Prompt | What it demonstrates |
-| --- | --- | --- |
-| 1 | `Create a high-priority task to finish the demo tomorrow.` | Natural-language task creation, priority, and due date |
-| 2 | `Show all unfinished tasks related to documentation.` | Semantic search and status filtering |
-| 3 | `Move the demo task to In progress and mark the weekly report Done.` | Two sequential operations, status changes, and task resolution |
-| 4 | `Change the priority of the API task to Low.` | Editing a task through conversational instructions |
-| 5 | `Which five tasks should I focus on first, and why?` | Read-only recommendations based on deadlines and priorities |
+| # | Development prompt to the AI coding assistant | Failure encountered | How I corrected and verified it |
+|---|---|---|---|
+| 1 | "The request `Show task #20 and task #21 separately` displays every task instead of only those two. Find the routing problem and give me a minimal safe fix with a regression test." | The generic task-list route intercepted an explicit multi-ID request. | Added a read-only route for explicitly mentioned task IDs before the general listing handler. Verified that only #20 and #21 were returned. |
+| 2 | "Priority sorting is correct, but `high -> low -> medium with dates descending` does not correctly order the deadlines within each priority group. Fix both newest-first and urgent-first sorting without breaking ordinary priority sorting." | Tasks were grouped by priority but their secondary date order was incorrect. | Implemented stable secondary date sorting within priority groups and tested both ascending and descending dates, including tasks without due dates. |
+| 3 | "The instruction `Move the SmartAssist Demo Recording task to In progress and mark the SmartAssist Weekly Report task Done` fails because Groq produces operations without task targets. Find a safe way to resolve the two named tasks without guessing IDs." | The LLM sometimes omitted `target`, causing backend task resolution to reject both operations. | Improved the structured-planning instructions, implemented recovery using unique exact task titles, corrected the recovery-call indentation, and verified both updates while leaving unrelated tasks unchanged. |
+| 4 | "When I ask `Which five tasks should I focus on first, and why?`, the assistant recommends only three. Make it respect the requested number and improve the ranking so distant deadlines do not automatically outrank higher-priority tasks." | The recommendation function always used its default limit of three, and distant due dates received excessive urgency. | Added requested-count extraction and a seven-day urgency window. Verified five-task recommendations, completed-task exclusion, and read-only behavior with regression tests. |
+| 5 | "The semantic query `Find tasks related to API documentation in the order hight -> low -> medium` returns no results, even though the task exists. Separate the search topic from the sorting instruction and handle the common `hight` typo safely." | Sorting words were accidentally included in the ChromaDB similarity query, producing irrelevant or empty retrieval results. | Updated the topic parser and narrowly normalized the priority typo. Added assertions for the exact ChromaDB query and the displayed priority ordering. |
 
-**Deletion and clarification demonstration:** You can also ask the agent to delete a **single test task** by its actual ID. For ambiguous names, the agent asks you to select the intended task. Multiple-task deletion requests are intentionally blocked. Avoid deleting important records during a live demo.
+### My Vibe-Coding Workflow
 
-**Persistence demonstration:** Create or update a test task, refresh the browser, then restart Streamlit. The task should retain its saved ID and values because SQLite stores the task state.
+1. **Prompt:** Describe the desired behavior using a concrete user instruction.
+2. **Test:** Run that instruction in the Streamlit application and inspect the actual response.
+3. **Debug:** Share the failing response, traceback, and relevant source files with the AI coding assistant.
+4. **Refine:** Apply a focused correction while preserving existing safety checks and persistent data.
+5. **Verify:** Add a pytest regression test, run the complete suite, and repeat the original instruction in the live application.
+
+This iterative workflow helped improve task resolution, structured action execution, search relevance, priority sorting, and recommendation accuracy without rewriting the working application.
 
 ## Validation, safety, and reliability
 
@@ -201,7 +207,7 @@ SQLite task records, conversation checkpoints, and the local ChromaDB index are 
 
 This repository addresses the assignment's core requirements: **chat-first single-page UI, complete task CRUD, task status and priority control, semantic search with ChromaDB, persistent SQLite task state, structured actions, validation, and clarification for ambiguous task changes.**
 
-The assignment also requires a **short demo video or live demonstration** alongside the repository link and README. Use the five prompts above and demonstrate persistence, semantic retrieval, and a safe task update during the presentation.
+The assignment also requires a **short demo video or live demonstration** alongside the repository link and README. The five prompts documented above illustrate the AI-assisted development process, while the demo video showcases working task creation, semantic retrieval, task updates, and persistent task state.
 
 **Repository:** https://github.com/Soumyo001/smartassist-ai
 

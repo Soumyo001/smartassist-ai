@@ -140,7 +140,14 @@ def ordering(
     Explicit relative instructions override this order.
     """
 
-    text = normal_words(message)
+    # Correct a common typo only in priority-sort sequences.
+    sortable_message = re.sub(
+        r"\bhight\b(?=\s*(?:->|→|then\b))",
+        "high",
+        message,
+        flags=re.I,
+    )
+    text = normal_words(sortable_message)
 
     default_priorities = [
         "High", "Medium", "Low"

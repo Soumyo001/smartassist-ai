@@ -1525,6 +1525,15 @@ def test_topical_search_routing_and_unfinished_filter(tmp_path):
     assert f"#{groceries['id']}" in shopping
     assert "Update API documentation" not in shopping
 
+    finished = run_turn(
+        "Show all finished tasks related to API documentation.",
+        **args,
+    )
+
+    assert "**Related tasks (1)**" in finished
+    assert f"#{documentation['id']}" in finished
+    assert "Buy groceries" not in finished
+
 def test_sorted_semantic_search_separates_topic_and_order(
     tmp_path,
     monkeypatch,
@@ -1644,6 +1653,29 @@ def test_sorted_semantic_search_separates_topic_and_order(
 
     assert collection.queries[-1] == "weekly reports"
     assert "**Related tasks (3)**" in without_the
+
+    # The word "the" and a misspelled "hight"
+    # must not become part of the vector query.
+    typo = run_turn(
+        "Find tasks related to weekly reports "
+        "in the order hight -> low -> medium",
+        **args,
+    )
+
+    assert collection.queries[-1] == "weekly reports"
+
+    assert (
+        "*Sorted by priority: High → Low → Medium*"
+        in typo
+    )
+
+    assert "**Related tasks (3)**" in typo
+
+    assert (
+        typo.index(f"#{high['id']}")
+        < typo.index(f"#{low['id']}")
+        < typo.index(f"#{medium['id']}")
+    )
 
     audited = run_turn(
         "was order explicitly as I said ?",
@@ -2530,3 +2562,110 @@ def test_two_named_status_updates_with_missing_targets(tmp_path):
     )
 
     assert len(list_tasks(db)) == 3
+
+
+def test_finished_tasks_filter_before_compound_sort(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": ["list_tasks"]
+    }))
+
+    high = create_task(
+        title="Finished High",
+        status="Done",
+        priority="High",
+        due_date="2026-10-28",
+        path=db,
+    )
+
+    low_oct = create_task(
+        title="Finished Low October",
+        status="Done",
+        priority="Low",
+        due_date="2026-10-28",
+        path=db,
+    )
+
+    low_nov = create_task(
+        title="Finished Low November",
+        status="Done",
+        priority="Low",
+        due_date="2026-11-16",
+        path=db,
+    )
+
+    medium = create_task(
+        title="Finished Medium",
+        status="Done",
+        priority="Medium",
+        path=db,
+    )
+
+    todo = create_task(
+        title="Unfinished Todo",
+        status="To do",
+        priority="High",
+        path=db,
+    )
+
+    active = create_task(
+        title="Unfinished Active",
+        status="In progress",
+        priority="Low",
+        path=db,
+    )
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Simple lists should not call Groq"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "finished-status-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    result = run_turn(
+        "show all finished tasks in order: "
+        "high -> low -> medium with dates descending",
+        **args,
+    )
+
+    assert "**Your tasks (4)**" in result
+    assert "Sorted by priority: High → Low → Medium" in result
+
+    expected = [high, low_nov, low_oct, medium]
+
+    positions = [
+        result.index(f"#{task['id']} ·")
+        for task in expected
+    ]
+
+    assert positions == sorted(positions)
+
+    assert f"#{todo['id']} ·" not in result
+    assert f"#{active['id']} ·" not in result
+
+    # Negated wording must return the two unfinished tasks.
+    unfinished = run_turn(
+        "Show all not finished tasks",
+        **args,
+    )
+
+    assert "**Your tasks (2)**" in unfinished
+    assert f"#{todo['id']} ·" in unfinished
+    assert f"#{active['id']} ·" in unfinished
+
+    for task in expected:
+        assert f"#{task['id']} ·" not in unfinished
+
+    # Neither request may modify stored records.
+    assert len(list_tasks(db)) == 6
