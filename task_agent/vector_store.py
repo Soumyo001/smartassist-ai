@@ -8,6 +8,11 @@ from .storage import DATA_DIR, DB_PATH
 
 COLLECTION_NAME = "smartassist_tasks"
 
+# Initial relevance cutoff calibrated using
+# observed search distances in this project.
+# Lower distance means stronger similarity.
+MAX_SEARCH_DISTANCE = 1.20
+
 VALID_STATUSES = {
     "To do",
     "In progress",
@@ -230,6 +235,14 @@ def search_tasks(
         matched_ids,
         distances
     ):
+        # Nearest does not necessarily mean relevant.
+        # Do not return weak semantic matches.
+        if (
+            distance is None
+            or float(distance) > MAX_SEARCH_DISTANCE
+        ):
+            continue
+
         # Never trust the vector index as the source of truth.
         task = storage.get_task(
             int(task_id),

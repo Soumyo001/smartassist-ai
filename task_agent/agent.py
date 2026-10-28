@@ -878,6 +878,74 @@ def build_graph(
 
                 return new_queue(actions)
 
+        # Explicit topical searches must use semantic
+        # retrieval, not an unfiltered task listing.
+        topic_match = re.fullmatch(
+            r"\s*(?:(?:please|can you|could you|would you)\s+)?"
+            r"(?:find|search(?:\s+for)?|show|list|display)\b"
+            r".*?\btasks?\b.*?"
+            r"\b(?:related to|similar to|about|regarding|concerning)\s+"
+            r"(.+?)\s*[.!?]?\s*",
+            latest,
+            re.I,
+        )
+
+        # Preserve the existing LLM path for requests
+        # combining search with another operation.
+        compound_action = re.search(
+            r"\b(?:then|also|plus)\b|"
+            r"\band\s+(?:create|update|delete|remove|"
+            r"complete|mark|set)\b",
+            latest,
+            re.I,
+        )
+
+        if topic_match and not compound_action:
+            topic = topic_match.group(1).strip(" .!?")
+
+            if topic:
+                status = None
+
+                if re.search(
+                    r"\bin[\s-]+progress\s+tasks?\b"
+                    r"|\btasks?\s+in[\s-]+progress\b",
+                    latest,
+                    re.I,
+                ):
+                    status = "In progress"
+
+                elif re.search(
+                    r"\b(?:done|completed)\s+tasks?\b"
+                    r"|\btasks?\s+(?:that\s+are\s+)?"
+                    r"(?:done|completed)\b",
+                    latest,
+                    re.I,
+                ):
+                    status = "Done"
+
+                elif re.search(
+                    r"\bto[\s-]+do\s+tasks?\b",
+                    latest,
+                    re.I,
+                ):
+                    status = "To do"
+
+                unfinished = bool(re.search(
+                    r"\b(?:unfinished|incomplete|pending|"
+                    r"not done|not completed)\b",
+                    latest,
+                    re.I,
+                ))
+
+                return new_queue([
+                    Operation(
+                        action="search_tasks",
+                        query=topic,
+                        status=status,
+                        unfinished=unfinished,
+                    )
+                ])
+
         # Unambiguous listings can be handled
         # without calling the LLM.
         if is_plain_list_request(latest):
@@ -1698,9 +1766,14 @@ def build_graph(
 
                 tasks = filter_tasks(
                     tasks,
-                    unfinished=operation.get(
-                        "unfinished",
-                        False,
+                    unfinished=(
+                        operation.get("unfinished", False)
+                        or bool(re.search(
+                            r"\b(?:unfinished|incomplete|pending|"
+                            r"not done|not completed)\b",
+                            latest,
+                            re.I,
+                        ))
                     ),
                     priority=(
                         operation.get(

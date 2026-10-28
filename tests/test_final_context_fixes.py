@@ -1384,3 +1384,143 @@ def test_status_filtered_lists_and_empty_priority_audit(tmp_path):
     assert "QA Todo Row" in all_tasks
     assert "QA Active Row" in all_tasks
     assert "QA Completed Row" in all_tasks
+
+
+
+def test_semantic_search_filters_distant_neighbors(
+    tmp_path,
+    monkeypatch,
+):
+    from task_agent import vector_store
+
+    db = tmp_path / "tasks.sqlite3"
+
+    documentation = create_task(
+        title="Update API documentation",
+        path=db,
+    )
+
+    unrelated = create_task(
+        title="Create a new task",
+        path=db,
+    )
+
+    class FakeCollection:
+        distances = [0.728, 1.572]
+
+        def count(self):
+            return 2
+
+        def query(self, **kwargs):
+            return {
+                "ids": [[
+                    str(documentation["id"]),
+                    str(unrelated["id"]),
+                ]],
+                "distances": [self.distances],
+            }
+
+    collection = FakeCollection()
+
+    monkeypatch.setattr(
+        vector_store,
+        "sync_task_index",
+        lambda **kwargs: None,
+    )
+
+    monkeypatch.setattr(
+        vector_store,
+        "get_task_collection",
+        lambda chroma_path=None: collection,
+    )
+
+    relevant = vector_store.search_tasks(
+        "API documentation",
+        db_path=db,
+        chroma_path=tmp_path / "chroma",
+    )
+
+    assert len(relevant) == 1
+    assert relevant[0]["id"] == documentation["id"]
+
+    # A query with only weak matches must return
+    # zero results, not arbitrary nearest tasks.
+    collection.distances = [1.699, 1.759]
+
+    irrelevant = vector_store.search_tasks(
+        "grocery shopping",
+        db_path=db,
+        chroma_path=tmp_path / "chroma",
+    )
+
+    assert irrelevant == []
+
+
+def test_topical_search_routing_and_unfinished_filter(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": ["search_tasks"]
+    }))
+
+    documentation = create_task(
+        title="Update API documentation",
+        status="Done",
+        path=db,
+    )
+
+    groceries = create_task(
+        title="Buy groceries",
+        status="To do",
+        path=db,
+    )
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Explicit topical searches should not "
+                "require Groq to choose the search tool"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "topical-search-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    # Topic must be extracted and searched semantically.
+    related = run_turn(
+        "Find tasks related to API documentation.",
+        **args,
+    )
+
+    assert "**Related tasks (1)**" in related
+    assert f"#{documentation['id']}" in related
+    assert "Buy groceries" not in related
+
+    # Semantic relevance and unfinished status
+    # must both be respected.
+    unfinished = run_turn(
+        "Show all unfinished tasks related to documentation.",
+        **args,
+    )
+
+    assert "**Related tasks (0)**" in unfinished
+    assert "No matching tasks found." in unfinished
+    assert "Update API documentation" not in unfinished
+    assert "Buy groceries" not in unfinished
+
+    # A different topic should find the other task.
+    shopping = run_turn(
+        "Search for tasks about grocery shopping.",
+        **args,
+    )
+
+    assert "**Related tasks (1)**" in shopping
+    assert f"#{groceries['id']}" in shopping
+    assert "Update API documentation" not in shopping
