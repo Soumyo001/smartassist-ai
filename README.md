@@ -188,7 +188,6 @@ smartassist-ai/
 │   └── tool_permissions.json      # Enabled task operations
 ├── tests/                         # Automated tests and regressions
 ├── verify_groq.py                 # Optional live API verification
-├── verify_step1.py                # Initial setup checks
 ├── requirements.txt
 ├── .env.example
 └── README.md
