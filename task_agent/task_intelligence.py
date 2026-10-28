@@ -425,7 +425,8 @@ def is_sort_audit_question(text: str) -> bool:
         )
         and re.search(
             r"\b(last|previous|prior|earlier|that|"
-            r"you|response|list|tasks)\b",
+            r"you|response|list|tasks|"
+            r"said|asked|requested|explicitly)\b",
             words,
         )
     )
@@ -447,7 +448,7 @@ def audit_last_priority_list(messages: list[str]) -> str:
         )
 
         task_heading = re.search(
-            r"\*\*Your tasks \((\d+)\)\*\*",
+            r"\*\*(?:Your|Related) tasks \((\d+)\)\*\*",
             message,
         )
 
@@ -498,6 +499,13 @@ def audit_last_priority_list(messages: list[str]) -> str:
             return (
                 f"The last list declared **{label}**, "
                 "but I couldn't verify all its task rows."
+            )
+
+        if expected == 1:
+            return (
+                "Only one task matched, so there is no relative "
+                "priority order to verify. "
+                f"The declared order was **{label}**."
             )
 
         positions = [

@@ -1524,3 +1524,137 @@ def test_topical_search_routing_and_unfinished_filter(tmp_path):
     assert "**Related tasks (1)**" in shopping
     assert f"#{groceries['id']}" in shopping
     assert "Update API documentation" not in shopping
+
+def test_sorted_semantic_search_separates_topic_and_order(
+    tmp_path,
+    monkeypatch,
+):
+    from task_agent import vector_store
+
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": ["search_tasks"]
+    }))
+
+    low = create_task(
+        title="Weekly report draft",
+        priority="Low",
+        path=db,
+    )
+    high = create_task(
+        title="Weekly report review",
+        priority="High",
+        path=db,
+    )
+    medium = create_task(
+        title="Weekly report summary",
+        priority="Medium",
+        path=db,
+    )
+
+    class ControlledCollection:
+        def __init__(self):
+            self.returned_ids = [
+                medium["id"],
+                high["id"],
+                low["id"],
+            ]
+            self.queries = []
+
+        def count(self):
+            return len(self.returned_ids)
+
+        def query(self, **kwargs):
+            self.queries.append(
+                kwargs["query_texts"][0]
+            )
+            return {
+                "ids": [[
+                    str(item)
+                    for item in self.returned_ids
+                ]],
+                "distances": [[
+                    0.4
+                ] * len(self.returned_ids)],
+            }
+
+    collection = ControlledCollection()
+
+    monkeypatch.setattr(
+        vector_store,
+        "sync_task_index",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        vector_store,
+        "get_task_collection",
+        lambda chroma_path=None: collection,
+    )
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Explicit topical search should bypass Groq"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "semantic-sort-query-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    prompt = (
+        "Find tasks related to weekly reports "
+        "in the order: low -> high -> medium"
+    )
+
+    ordered = run_turn(prompt, **args)
+
+    # The vector search must receive only the topic.
+    assert collection.queries == ["weekly reports"]
+
+    # The displayed list must declare its priority order.
+    assert (
+        "*Sorted by priority: Low → High → Medium*"
+        in ordered
+    )
+    assert "**Related tasks (3)**" in ordered
+
+    # Chroma returned a different sequence.
+    # The agent must apply the user-requested order.
+    assert (
+        ordered.index(f"#{low['id']}")
+        < ordered.index(f"#{high['id']}")
+        < ordered.index(f"#{medium['id']}")
+    )
+
+    audited = run_turn(
+        "was order explicitly as I said ?",
+        **args,
+    )
+
+    assert "**Yes.**" in audited
+
+    # A singleton result does not demonstrate
+    # any relative ordering.
+    collection.returned_ids = [medium["id"]]
+
+    single = run_turn(prompt, **args)
+    assert "**Related tasks (1)**" in single
+
+    single_audit = run_turn(
+        "was order explicitly as I said ?",
+        **args,
+    )
+
+    assert "Only one task matched" in single_audit
+    assert (
+        "no relative priority order to verify"
+        in single_audit
+    )

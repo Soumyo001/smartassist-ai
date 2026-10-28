@@ -903,6 +903,17 @@ def build_graph(
         if topic_match and not compound_action:
             topic = topic_match.group(1).strip(" .!?")
 
+            # Sorting instructions should not be embedded
+            # into the semantic search query.
+            topic = re.split(
+                r"\s*,?\s+(?:in\s+the\s+order|"
+                r"(?:sorted|ordered)\s+by\s+priority)"
+                r"\s*:?\s*(?=low\b|medium\b|high\b)",
+                topic,
+                maxsplit=1,
+                flags=re.I,
+            )[0].strip()
+
             if topic:
                 status = None
 
@@ -1818,12 +1829,20 @@ def build_graph(
                         priority_order=priorities,
                     )
 
-                results.append(
-                    format_task_list(
-                        tasks,
-                        "Related tasks",
-                    )
+                output = format_task_list(
+                    tasks,
+                    "Related tasks",
                 )
+
+                if sort_requested and field == "priority":
+                    output = (
+                        "*Sorted by priority: "
+                        + " → ".join(priorities)
+                        + "*\n\n"
+                        + output
+                    )
+
+                results.append(output)
 
             else:
                 raise PermissionError(
