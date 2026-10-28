@@ -55,7 +55,7 @@ The seven available tools are `create_task`, `list_tasks`, `get_task`, `update_t
 
 - Ubuntu/Linux with **Python 3.12** (the development environment)
 - A **Groq API key**
-- Internet access for the initial download of ChromaDB's default embedding model, if not already cached
+- Initial download of ChromaDB's default embedding model, if not already cached
 
 ### 1. Clone and install
 
