@@ -207,8 +207,6 @@ This repository addresses the assignment's core requirements: **chat-first singl
 
 The assignment also requires a **short demo video or live demonstration** alongside the repository link and README. The five prompts documented above illustrate the AI-assisted development process, while the demo video showcases working task creation, semantic retrieval, task updates, and persistent task state.
 
-**Repository:** https://github.com/Soumyo001/smartassist-ai
-
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
