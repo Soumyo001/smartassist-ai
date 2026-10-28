@@ -204,6 +204,46 @@ def normalize(text: str) -> str:
     return normal_words(text)
 
 
+def sort_priority_then_newest_date(
+    tasks: list[dict],
+    request: str,
+    field: str,
+    priorities: list[str],
+) -> list[dict]:
+    """Apply newest due date first within priority groups."""
+
+    date_descending = re.search(
+        r"\b(?:due\s+)?dates?\b.{0,50}\bdescending\b"
+        r"|\b(?:latest|newest)\s+(?:due\s+)?dates?\s+first\b",
+        request,
+        re.I,
+    )
+
+    if field != "priority" or not date_descending:
+        return tasks
+
+    # Stable sort: newest dates first, undated last.
+    by_date = sorted(
+        tasks,
+        key=lambda task: task.get("due_date") or "",
+        reverse=True,
+    )
+
+    # Stable priority sort preserves date order
+    # inside each priority group.
+    ranks = {
+        priority: index
+        for index, priority in enumerate(priorities)
+    }
+
+    return sorted(
+        by_date,
+        key=lambda task: ranks.get(
+            task["priority"],
+            len(ranks),
+        ),
+    )
+
 def choose_candidate(
     text: str,
     candidates: list[dict],
@@ -1732,6 +1772,13 @@ def build_graph(
                     priority_order=priorities,
                 )
 
+                tasks = sort_priority_then_newest_date(
+                    tasks,
+                    list_request,
+                    field,
+                    priorities,
+                )
+
                 output = format_task_list(tasks)
 
                 # Make the applied priority order visible.
@@ -1827,6 +1874,13 @@ def build_graph(
                         field=field,
                         reverse=reverse,
                         priority_order=priorities,
+                    )
+
+                    tasks = sort_priority_then_newest_date(
+                        tasks,
+                        latest,
+                        field,
+                        priorities,
                     )
 
                 output = format_task_list(

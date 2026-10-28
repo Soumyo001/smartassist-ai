@@ -1658,3 +1658,114 @@ def test_sorted_semantic_search_separates_topic_and_order(
         "no relative priority order to verify"
         in single_audit
     )
+
+
+def test_priority_then_date_descending_list(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": ["list_tasks"]
+    }))
+
+    high = create_task(
+        title="High October",
+        status="Done",
+        priority="High",
+        due_date="2026-10-28",
+        path=db,
+    )
+
+    low_october = create_task(
+        title="Low October",
+        status="Done",
+        priority="Low",
+        due_date="2026-10-28",
+        path=db,
+    )
+
+    low_november = create_task(
+        title="Low November",
+        status="Done",
+        priority="Low",
+        due_date="2026-11-16",
+        path=db,
+    )
+
+    low_undated = create_task(
+        title="Low No Date",
+        status="Done",
+        priority="Low",
+        path=db,
+    )
+
+    medium = create_task(
+        title="Medium No Date",
+        status="Done",
+        priority="Medium",
+        path=db,
+    )
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Plain listing should not require Groq"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "priority-date-compound-sort",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    prompts = [
+        (
+            "show all completed tasks in order: "
+            "high -> low -> medium "
+            "with dates in descending order"
+        ),
+        (
+            "show all completed tasks in order: "
+            "high -> low -> medium "
+            "with latest date first"
+        ),
+    ]
+
+    for prompt in prompts:
+        result = run_turn(prompt, **args)
+
+        assert "**Your tasks (5)**" in result
+        assert (
+            "Sorted by priority: High → Low → Medium"
+            in result
+        )
+
+        positions = [
+            result.index(f"#{task['id']}")
+            for task in (
+                high,
+                low_november,
+                low_october,
+                low_undated,
+                medium,
+            )
+        ]
+
+        assert positions == sorted(positions)
+
+    # Without a secondary date instruction,
+    # retain the original priority sorting behavior.
+    ordinary = run_turn(
+        "Show completed tasks in order: "
+        "high -> low -> medium",
+        **args,
+    )
+
+    assert (
+        ordinary.index(f"#{low_october['id']}")
+        < ordinary.index(f"#{low_november['id']}")
+    )
