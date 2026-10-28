@@ -528,15 +528,22 @@ def recommend_next_tasks(
         if due == today + timedelta(days=1):
             return (2, "Due tomorrow")
 
-        return (3, f"Due {raw}")
+        # Only near-term deadlines outrank
+        # tasks based purely on due-date urgency.
+        if due <= today + timedelta(days=7):
+            return (3, f"Due {raw}")
+
+        # Distant deadlines share the same urgency
+        # category as tasks without deadlines.
+        return (4, f"Due {raw}")
 
     ranked = sorted(
         open_tasks,
         key=lambda task: (
             urgency(task)[0],
             priority_rank.get(task["priority"], 3),
-            0 if task["status"] == "In progress" else 1,
             task.get("due_date") or "9999-12-31",
+            0 if task["status"] == "In progress" else 1,
             task["id"],
         ),
     )

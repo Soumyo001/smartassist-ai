@@ -2167,3 +2167,72 @@ def test_task_advice_respects_requested_count(tmp_path):
     assert list_tasks(db) == before
 
     assert planner.calls == 3
+
+
+def test_advice_ranking_balances_urgency_and_priority():
+    import re
+
+    from task_agent.response_formatting import (
+        recommend_next_tasks,
+    )
+
+    def task(
+        task_id,
+        priority,
+        due_date=None,
+        status="To do",
+    ):
+        return {
+            "id": task_id,
+            "title": f"QA Ranking Task {task_id}",
+            "priority": priority,
+            "due_date": due_date,
+            "status": status,
+        }
+
+    tasks = [
+        task(1, "Medium", "2026-11-19"),
+        task(2, "High"),
+        task(3, "Medium", "2026-11-04"),
+        task(4, "Low", "2026-10-29"),
+        task(5, "Low", "2026-10-27"),
+        task(6, "High", "2026-10-01", "Done"),
+        task(7, "Medium", status="In progress"),
+        task(8, "High", "2026-11-05"),
+        task(9, "High", "2026-10-28"),
+        task(10, "Low", "2026-11-04"),
+    ]
+
+    before = [dict(item) for item in tasks]
+
+    result = recommend_next_tasks(
+        tasks,
+        today=date(2026, 10, 28),
+        limit=10,
+    )
+
+    recommended_ids = [
+        int(task_id)
+        for task_id in re.findall(
+            r"(?m)^\d+\. \*\*#(\d+) ·",
+            result,
+        )
+    ]
+
+    assert recommended_ids == [
+        5,   # Overdue
+        9,   # Due today
+        4,   # Due tomorrow
+        3,   # Due in seven days, Medium
+        10,  # Due in seven days, Low
+        8,   # Distant deadline, High
+        2,   # No deadline, High
+        1,   # Distant deadline, Medium
+        7,   # No deadline, Medium
+    ]
+
+    # Completed task #6 must not appear.
+    assert 6 not in recommended_ids
+
+    # Recommendations must never change task data.
+    assert tasks == before
