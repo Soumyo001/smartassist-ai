@@ -5,7 +5,7 @@ A chat-first, single-page task manager built for the **AI Agent Task Manager** i
 **Repository:** https://github.com/Soumyo001/smartassist-ai  
 **Development source of truth:** The user's latest local project in `~/Documents/smartassist-ai` may be newer than the remote repository.
 
-## Implemented architecture (as represented in the source code)
+## Implemented architecture
 
 - **Interface:** Streamlit (`app.py`), with a task board and AI conversation on one page.
 - **Agent:** LangGraph and LangChain; the planner uses GroqCloud's hosted `openai/gpt-oss-20b` model for structured task plans.
