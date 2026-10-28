@@ -1012,6 +1012,41 @@ def build_graph(
                     )
                 ])
 
+        # Explicit requests for multiple task IDs must
+        # retrieve only those tasks, not the entire board.
+        # This route is read-only.
+        multi_id_read = re.fullmatch(
+            r"\s*(?:please\s+)?"
+            r"(?:show|display|view|get|list)\s+"
+            r"(?:me\s+)?"
+            r"(?:details\s+(?:for|of)\s+)?"
+            r"(?:the\s+)?tasks?\s+[#$]\s*\d+"
+            r"(?:\s*(?:,\s*(?:then\s+)?|and\s+|then\s+)"
+            r"(?:(?:get|show|display|view|list)\s+)?"
+            r"(?:details\s+(?:for|of)\s+)?"
+            r"(?:the\s+)?(?:tasks?\s+)?[#$]\s*\d+)+"
+            r"(?:\s+(?:separately|individually|one\s+by\s+one))?"
+            r"\s*[.!?]?\s*",
+            latest,
+            re.I,
+        )
+
+        if multi_id_read:
+            requested_ids = list(dict.fromkeys(
+                int(task_id)
+                for task_id in re.findall(
+                    r"[#$]\s*(\d+)", latest
+                )
+            ))
+
+            return new_queue([
+                Operation(
+                    action="get_task",
+                    task_id=task_id,
+                )
+                for task_id in requested_ids
+            ])
+
         # Unambiguous listings can be handled
         # without calling the LLM.
         if is_plain_list_request(latest):

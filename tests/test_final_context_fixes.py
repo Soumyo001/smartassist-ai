@@ -1892,3 +1892,99 @@ def test_priority_then_urgent_date_first(tmp_path):
         ordinary.index(f"#{low_november['id']}")
         < ordinary.index(f"#{low_october['id']}")
     )
+
+
+def test_explicit_multi_id_reads_do_not_list_everything(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+        ]
+    }))
+
+    first = create_task(
+        title="QA Read Alpha",
+        path=db,
+    )
+
+    second = create_task(
+        title="QA Read Beta",
+        path=db,
+    )
+
+    unrelated = create_task(
+        title="QA Read Unrelated",
+        path=db,
+    )
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Explicit ID reads should not call Groq"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "explicit-multi-id-read",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    prompts = [
+        (
+            f"Show task #{first['id']} and "
+            f"task #{second['id']} separately.",
+            [first, second],
+        ),
+        (
+            f"Get details for task #{first['id']}, "
+            f"then get details for task #{second['id']}.",
+            [first, second],
+        ),
+        (
+            f"Show task #{second['id']} and "
+            f"#{first['id']} separately.",
+            [second, first],
+        ),
+    ]
+
+    for prompt, expected in prompts:
+        reply = run_turn(prompt, **args)
+
+        # Exactly two task-detail operations.
+        assert reply.count("✅ **Task details**") == 2
+        assert reply.count("*Action: `get_task`*") == 2
+
+        # Both requested tasks must be present.
+        assert expected[0]["title"] in reply
+        assert expected[1]["title"] in reply
+
+        # Preserve the order supplied by the user.
+        assert (
+            reply.index(f"#{expected[0]['id']} ·")
+            < reply.index(f"#{expected[1]['id']} ·")
+        )
+
+        # Never include an unrelated task.
+        assert unrelated["title"] not in reply
+        assert "**Your tasks (3)**" not in reply
+
+    # Ordinary "show all" requests still work.
+    all_tasks = run_turn(
+        "Show all tasks",
+        **args,
+    )
+
+    assert "**Your tasks (3)**" in all_tasks
+    assert first["title"] in all_tasks
+    assert second["title"] in all_tasks
+    assert unrelated["title"] in all_tasks
+
+    # Read-only operations must not change records.
+    assert len(list_tasks(db)) == 3
