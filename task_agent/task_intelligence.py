@@ -323,14 +323,85 @@ def is_merge_request(text: str) -> bool:
     ))
 
 
+
 def is_explicit_delete_request(text: str) -> bool:
-    """Only explicit delete/remove language authorizes deletion."""
+    """Require an affirmative delete/remove instruction."""
+
+    # Negated or cancelled instructions are not
+    # authorization to delete a task.
+    if re.search(
+        r"\b(?:do\s+not|don't|dont|never|avoid|"
+        r"without|cancel|stop)\b"
+        r".{0,45}\b(?:delete|remove)\b",
+        text,
+        re.I,
+    ):
+        return False
+
     return bool(re.search(
         r"\b(delete|remove)\b",
         text,
         re.I,
     ))
 
+def is_bulk_delete_request(text: str) -> bool:
+    """
+    Conservatively identify multi-task deletion requests.
+
+    Never permit an intended bulk deletion to become
+    an accidental single-task deletion.
+    """
+
+    if not is_explicit_delete_request(text):
+        return False
+
+    # Explicit references to multiple database IDs.
+    if len(mentioned_task_ids(text)) > 1:
+        return True
+
+    # Multiple quoted titles are multiple targets.
+    quoted_titles = re.findall(
+        r"""(?:"[^"\r\n]+"|'[^'\r\n]+')""",
+        text,
+    )
+
+    if len(quoted_titles) > 1:
+        return True
+
+    # A single quoted title is allowed to contain
+    # words such as "and", "all", or commas.
+    single_quoted_title = re.fullmatch(
+        r"\s*(?:please\s+)?(?:delete|remove)\s+"
+        r"(?:(?:the|my)\s+)?(?:task\s+)?"
+        r"(?:(?:titled|named)\s+)?"
+        r"""(?:"[^"\r\n]+"|'[^'\r\n]+')\s*[.!]?\s*""",
+        text,
+        re.I,
+    )
+
+    if single_quoted_title:
+        return False
+
+    # Plural requests or broad quantifiers.
+    if re.search(
+        r"\b(?:all|every|both|each|multiple|"
+        r"several|many|two|three|four|five|"
+        r"six|tasks)\b",
+        text,
+        re.I,
+    ):
+        return True
+
+    # Compound or enumerated instructions are
+    # treated conservatively.
+    if re.search(
+        r"\b(?:and|or|then|plus|also|but)\b|[,;]",
+        text,
+        re.I,
+    ):
+        return True
+
+    return False
 
 def is_sort_audit_question(text: str) -> bool:
     """Detect questions about the accuracy of a previous sort."""

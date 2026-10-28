@@ -3,7 +3,7 @@ import json
 from datetime import date
 
 from task_agent.agent import ActionPlan, Operation, run_turn
-from task_agent.storage import create_task, list_tasks
+from task_agent.storage import create_task, list_tasks, get_task
 
 from task_agent.response_formatting import format_task_list
 
@@ -11,6 +11,8 @@ from task_agent.task_intelligence import (
     audit_last_priority_list,
     standalone_due_date,
     mentioned_task_ids,
+    is_bulk_delete_request,
+    is_explicit_delete_request,
 )
 
 
@@ -613,7 +615,7 @@ def test_multiple_deletions_are_blocked_once(tmp_path):
     # An ambiguous model-generated two-delete plan
     # must also be rejected as a single response.
     reply = run_turn(
-        "remove Alpha and Beta",
+        "remove Alpha",
         **args,
     )
 
@@ -629,3 +631,595 @@ def test_multiple_deletions_are_blocked_once(tmp_path):
         first["id"],
         second["id"],
     }
+
+
+def test_bulk_delete_phrasings_are_blocked_before_planning(
+    tmp_path,
+):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    first = create_task(title="Alpha", path=db)
+    second = create_task(title="Beta", path=db)
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Bulk deletion must not invoke the planner"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "bulk-language-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    requests = [
+        "delete all my tasks",
+        "delete task A and B",
+        "remove all completed and pending tasks",
+        "delete both tasks",
+        "remove Alpha and Beta",
+        "delete task #17 and #18",
+        "remove task ID 17,18",
+        'delete "Alpha" "Beta"',
+    ]
+
+    for message in requests:
+        result = run_turn(message, **args)
+
+        assert result.count("For safety") == 1
+        assert "No tasks were deleted" in result
+
+    remaining = {
+        task["id"]
+        for task in list_tasks(db)
+    }
+
+    assert remaining == {
+        first["id"],
+        second["id"],
+    }
+
+    assert not is_bulk_delete_request(
+        'delete task "Research and Development"'
+    )
+
+    assert not is_explicit_delete_request(
+        "Don't delete task #17"
+    )
+
+
+def test_ambiguous_delete_resumes_by_option(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    first = create_task(
+        title="QA Archive Alpha",
+        path=db,
+    )
+
+    second = create_task(
+        title="QA Archive Beta",
+        path=db,
+    )
+
+    class DeletePlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            return ActionPlan(
+                operations=[
+                    Operation(
+                        action="delete_task",
+                        target="QA Archive",
+                    )
+                ]
+            )
+
+    planner = DeletePlanner()
+
+    args = {
+        "planner": planner,
+        "thread_id": "ambiguous-delete-option",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    initial = run_turn(
+        "Delete the QA Archive task",
+        **args,
+    )
+
+    assert "Which task did you mean?" in initial
+
+    # Clarification must not modify any task.
+    assert get_task(first["id"], db) is not None
+    assert get_task(second["id"], db) is not None
+
+    # list_tasks orders these To do tasks by descending ID.
+    # Therefore option 1 refers to the second-created task.
+    selected = run_turn("1", **args)
+
+    assert "Task deleted" in selected
+    assert get_task(second["id"], db) is None
+    assert get_task(first["id"], db) is not None
+
+    # Selecting a displayed option must not call Groq.
+    assert planner.calls == 1
+
+
+def test_ambiguous_delete_cancel_and_explicit_id(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    first = create_task(
+        title="QA Archive Alpha",
+        path=db,
+    )
+
+    second = create_task(
+        title="QA Archive Beta",
+        path=db,
+    )
+
+    class DeletePlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            return ActionPlan(
+                operations=[
+                    Operation(
+                        action="delete_task",
+                        target="QA Archive",
+                    )
+                ]
+            )
+
+    planner = DeletePlanner()
+
+    args = {
+        "planner": planner,
+        "thread_id": "ambiguous-delete-id",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    first_reply = run_turn(
+        "Delete the QA Archive task",
+        **args,
+    )
+
+    assert "Which task did you mean?" in first_reply
+
+    # An ID outside the candidate list is invalid.
+    invalid = run_turn("#999", **args)
+
+    assert "Which task did you mean?" in invalid
+    assert len(list_tasks(db)) == 2
+
+    # Cancelling must discard the pending deletion.
+    cancelled = run_turn("cancel that", **args)
+
+    assert "Cancelled" in cancelled
+    assert len(list_tasks(db)) == 2
+
+    # Start a fresh explicit deletion request.
+    clarification = run_turn(
+        "Delete the QA Archive task",
+        **args,
+    )
+
+    assert "Which task did you mean?" in clarification
+
+    # Select an actual database ID rather than option 1.
+    result = run_turn(
+        f"#{first['id']}",
+        **args,
+    )
+
+    assert "Task deleted" in result
+    assert get_task(first["id"], db) is None
+    assert get_task(second["id"], db) is not None
+
+    assert planner.calls == 2
+
+
+def test_negated_delete_and_quoted_single_title(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    task = create_task(
+        title="Research and Development",
+        path=db,
+    )
+
+    class DeletePlanner:
+        def invoke(self, messages):
+            return ActionPlan(
+                operations=[
+                    Operation(
+                        action="delete_task",
+                        target="Research and Development",
+                    )
+                ]
+            )
+
+    args = {
+        "planner": DeletePlanner(),
+        "thread_id": "quoted-delete-safety",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    # Even a faulty LLM deletion plan must not override
+    # an explicitly negated user instruction.
+    blocked = run_turn(
+        "Don't delete Research and Development",
+        **args,
+    )
+
+    assert "Could not delete_task" in blocked
+    assert get_task(task["id"], db) is not None
+
+    # A single quoted title containing "and" is valid.
+    removed = run_turn(
+        'Delete task "Research and Development"',
+        **args,
+    )
+
+    assert "Task deleted" in removed
+    assert get_task(task["id"], db) is None
+
+
+def test_groq_conversation_delete_clarification_option(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    alpha = create_task(
+        title="QA Deletion Probe Alpha",
+        path=db,
+    )
+
+    beta = create_task(
+        title="QA Deletion Probe Beta",
+        path=db,
+    )
+
+    class ConversationPlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            return ActionPlan(
+                mode="conversation",
+                message=(
+                    "Which QA Deletion Probe task would "
+                    "you like to delete? Alpha or Beta?"
+                ),
+            )
+
+    planner = ConversationPlanner()
+
+    args = {
+        "planner": planner,
+        "thread_id": "conversation-delete-option",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    first = run_turn(
+        "Delete the QA Deletion Probe task",
+        **args,
+    )
+
+    assert "Which task did you mean?" in first
+    assert f"#{alpha['id']}" in first
+    assert f"#{beta['id']}" in first
+
+    # Clarification must not delete either task.
+    assert get_task(alpha["id"], db) is not None
+    assert get_task(beta["id"], db) is not None
+
+    # The backend lists these To do tasks by
+    # descending ID, so option 1 is Beta.
+    second = run_turn("1", **args)
+
+    assert "Task deleted" in second
+    assert f"#{beta['id']}" in second
+
+    assert get_task(beta["id"], db) is None
+    assert get_task(alpha["id"], db) is not None
+
+    # No extra Groq call for the selection.
+    assert planner.calls == 1
+
+
+def test_groq_conversation_delete_cancel_and_id(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    alpha = create_task(
+        title="QA Deletion Probe Alpha",
+        path=db,
+    )
+
+    beta = create_task(
+        title="QA Deletion Probe Beta",
+        path=db,
+    )
+
+    class ConversationPlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            return ActionPlan(
+                mode="conversation",
+                message=(
+                    "Which task would you like "
+                    "to delete? Alpha or Beta?"
+                ),
+            )
+
+    planner = ConversationPlanner()
+
+    args = {
+        "planner": planner,
+        "thread_id": "conversation-delete-cancel",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    first = run_turn(
+        "Delete the QA Deletion Probe task",
+        **args,
+    )
+
+    assert "Which task did you mean?" in first
+
+    # An ID not displayed as a candidate must
+    # never authorize deletion.
+    invalid = run_turn("#999", **args)
+
+    assert "Which task did you mean?" in invalid
+    assert len(list_tasks(db)) == 2
+
+    # Cancellation must discard authorization.
+    cancelled = run_turn("cancel that", **args)
+
+    assert "Cancelled" in cancelled
+    assert len(list_tasks(db)) == 2
+
+    # Start a completely new request.
+    second_request = run_turn(
+        "Delete the QA Deletion Probe task",
+        **args,
+    )
+
+    assert "Which task did you mean?" in second_request
+
+    # Now choose an actual displayed task ID.
+    selected = run_turn(
+        f"#{alpha['id']}",
+        **args,
+    )
+
+    assert "Task deleted" in selected
+
+    assert get_task(alpha["id"], db) is None
+    assert get_task(beta["id"], db) is not None
+
+    assert planner.calls == 2
+
+
+def test_groq_cannot_autoselect_ambiguous_delete(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    alpha = create_task(
+        title="QA Deletion Probe Alpha",
+        path=db,
+    )
+
+    beta = create_task(
+        title="QA Deletion Probe Beta",
+        path=db,
+    )
+
+    class GuessingPlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            # Simulate the dangerous real behavior:
+            # Groq chooses Alpha without user selection.
+            return ActionPlan(
+                mode="actions",
+                operations=[
+                    Operation(
+                        action="delete_task",
+                        target="QA Deletion Probe Alpha",
+                    )
+                ]
+            )
+
+    planner = GuessingPlanner()
+
+    args = {
+        "planner": planner,
+        "thread_id": "unsafe-delete-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    first = run_turn(
+        "Delete the QA Deletion Probe task",
+        **args,
+    )
+
+    # Must clarify even though Groq chose Alpha.
+    assert "Which task did you mean?" in first
+    assert f"#{alpha['id']}" in first
+    assert f"#{beta['id']}" in first
+    assert "Task deleted" not in first
+
+    # Absolutely no deletion before selection.
+    assert get_task(alpha["id"], db) is not None
+    assert get_task(beta["id"], db) is not None
+
+    # Option 1 corresponds to Beta (descending ID).
+    second = run_turn("1", **args)
+
+    assert "Task deleted" in second
+    assert f"#{beta['id']}" in second
+
+    assert get_task(alpha["id"], db) is not None
+    assert get_task(beta["id"], db) is None
+
+    # Selection must not require Groq again.
+    assert planner.calls == 1
+
+
+def test_partial_delete_title_cannot_authorize_model_guess(
+    tmp_path,
+):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "list_tasks",
+            "delete_task",
+        ]
+    }))
+
+    beta = create_task(
+        title="QA Deletion Probe Beta",
+        path=db,
+    )
+
+    class GuessingPlanner:
+        def invoke(self, messages):
+            return ActionPlan(
+                mode="actions",
+                operations=[
+                    Operation(
+                        action="delete_task",
+                        target="QA Deletion Probe Beta",
+                    )
+                ]
+            )
+
+    args = {
+        "planner": GuessingPlanner(),
+        "thread_id": "partial-delete-guard",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    result = run_turn(
+        "Delete the QA Deletion Probe task",
+        **args,
+    )
+
+    # A partial name is not permission for Groq
+    # to choose the remaining task by itself.
+    assert "Could not delete_task" in result
+    assert "No task was deleted" in result
+    assert "Task deleted" not in result
+
+    assert get_task(beta["id"], db) is not None

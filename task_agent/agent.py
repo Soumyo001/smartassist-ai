@@ -63,6 +63,7 @@ from .task_intelligence import (
     audit_last_priority_list,
     is_retryable_groq_json_error,
     standalone_due_date,
+    is_bulk_delete_request,
 )
 
 
@@ -548,33 +549,11 @@ def build_graph(
                 ),
             }
 
-        # Do not send explicit bulk-delete requests
-        # to the planner or execute any deletion.
-        if is_explicit_delete_request(latest):
 
-            delete_ids = mentioned_task_ids(latest)
-
-            delete_all = re.search(
-                r"\b(?:all|every)\s+(?:the\s+)?tasks\b",
-                latest,
-                re.I,
-            )
-
-            multiple_named_tasks = re.search(
-                r"\b(?:delete|remove)\b"
-                r"[^\n.!?]*\btask\b"
-                r"[^\n.!?]*\band\s+"
-                r"(?:the\s+)?task\b",
-                latest,
-                re.I,
-            )
-
-            if (
-                len(delete_ids) > 1
-                or delete_all
-                or multiple_named_tasks
-            ):
-                return reject_bulk_delete()
+        # Reject bulk deletion before the LLM can
+        # reinterpret it as a single delete action.
+        if is_bulk_delete_request(latest):
+            return reject_bulk_delete()
 
         candidates = (
             state.get("pending_candidates")
@@ -1165,6 +1144,89 @@ def build_graph(
                 ),
             }
 
+        # Resolve ambiguous single-task deletions using
+        # actual database records, regardless of whether
+        # Groq returned conversation or actions mode.
+        if (
+            is_explicit_delete_request(latest)
+            and not is_bulk_delete_request(latest)
+            and not mentioned_task_ids(latest)
+            and all(
+                name in registry
+                for name in (
+                    "list_tasks",
+                    "get_task",
+                    "delete_task",
+                )
+            )
+        ):
+            request = re.fullmatch(
+                r"\s*(?:please\s+)?"
+                r"(?:delete|remove)\s+"
+                r"(?:(?:the|my)\s+)?"
+                r"(.+?)\s+task\s*[.!]?\s*",
+                latest,
+                re.I,
+            )
+
+            if request:
+                target = request.group(1).strip()
+                key = normalize(target)
+
+                if len(key) >= 4 and key not in {
+                    "task",
+                    "this",
+                    "that",
+                    "some",
+                    "any",
+                    "all",
+                    "your",
+                    "mine",
+                }:
+                    tasks = call_tool(
+                        "list_tasks",
+                        {"status": None},
+                    )
+
+                    exact = any(
+                        normalize(task["title"]) == key
+                        for task in tasks
+                    )
+
+                    candidates = [
+                        task for task in tasks
+                        if normalize(
+                            task["title"]
+                        ).startswith(key + " ")
+                    ]
+
+                    if not exact and len(candidates) > 1:
+                        candidates = candidates[:5]
+
+                        pending = new_queue([
+                            Operation(
+                                action="delete_task",
+                                target=target,
+                            )
+                        ])
+
+                        pending["pending_actions"][0][
+                            "_delete_authorized"
+                        ] = True
+
+                        pending["pending_candidates"] = (
+                            candidates
+                        )
+
+                        pending["blocked"] = True
+                        pending["response"] = (
+                            clarification_message(
+                                candidates
+                            )
+                        )
+
+                        return pending
+
         if plan.mode == "conversation" or not plan.operations:
             return {
                 "pending_actions": [],
@@ -1268,21 +1330,41 @@ def build_graph(
                 
                 if action == "delete_task":
 
-                    if (
-                        is_merge_request(latest)
-                        or not is_explicit_delete_request(latest)
-                    ):
-                        raise ValueError(
-                            "Deletion requires an explicit "
-                            "'delete' or 'remove' instruction. "
-                            "A merge is not permission to delete."
-                        )
+                    if operation.get("_resolved_id") is not None:
+                        # The user selected a task from a
+                        # previous clarification.
+                        #
+                        # Continue only if the original
+                        # delete request was validated.
+                        if (
+                            operation.get("_delete_authorized")
+                            is not True
+                        ):
+                            raise ValueError(
+                                "Deletion was not authorized. "
+                                "Please send a new explicit "
+                                "delete instruction."
+                            )
 
-                    if len(mentioned_task_ids(latest)) > 1:
-                        raise ValueError(
-                            "For safety, delete one task ID "
-                            "per request."
-                        )
+                    else:
+                        # Normal, newly requested deletion.
+                        if (
+                            is_merge_request(latest)
+                            or not is_explicit_delete_request(
+                                latest
+                            )
+                        ):
+                            raise ValueError(
+                                "Deletion requires an explicit "
+                                "'delete' or 'remove' instruction. "
+                                "A merge is not permission to delete."
+                            )
+
+                        if is_bulk_delete_request(latest):
+                            raise ValueError(
+                                "For safety, delete only one task "
+                                "per request."
+                            )
 
                 task_id, candidates = resolve_task(
                     operation,
@@ -1290,6 +1372,13 @@ def build_graph(
                 )
 
                 if candidates:
+                    if action == "delete_task":
+                        # Mark the pending deletion only after
+                        # the original request passed the
+                        # authorization checks above.
+                        operation["_delete_authorized"] = True
+                        queue[0] = operation
+
                     return {
                         "pending_actions": queue,
                         "pending_candidates": candidates,
@@ -1303,6 +1392,31 @@ def build_graph(
                         ),
                         "blocked": True,
                     }
+
+                # A planner must not choose a deletion
+                # target that the user never identified.
+                if (
+                    action == "delete_task"
+                    and operation.get("_resolved_id") is None
+                    and not mentioned_task_ids(latest)
+                ):
+                    actual_task = call_tool(
+                        "get_task",
+                        {"task_id": task_id},
+                    )
+
+                    if (
+                        actual_task is None
+                        or (
+                            f" {normalize(actual_task['title'])} "
+                            not in f" {normalize(latest)} "
+                        )
+                    ):
+                        raise ValueError(
+                            "Please specify the exact task title "
+                            "or #ID before deleting. "
+                            "No task was deleted."
+                        )
 
                 payload = {
                     "task_id": task_id
