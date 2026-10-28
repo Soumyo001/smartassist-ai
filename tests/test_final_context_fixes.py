@@ -1269,3 +1269,118 @@ def test_empty_priority_list_is_correctly_audited():
     assert "**Yes.**" in audit_last_priority_list(
         [nonempty_list]
     )
+
+
+def test_status_filtered_lists_and_empty_priority_audit(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": ["list_tasks"]
+    }))
+
+    todo = create_task(
+        title="QA Todo Row",
+        status="To do",
+        priority="Low",
+        path=db,
+    )
+
+    done = create_task(
+        title="QA Completed Row",
+        status="Done",
+        priority="High",
+        path=db,
+    )
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Simple status-filtered lists must not call Groq"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "status-filter-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    # No task is In progress yet.
+    empty = run_turn(
+        "Show my in-progress tasks sorted by priority: "
+        "Low → High → Medium.",
+        **args,
+    )
+
+    assert "Sorted by priority: Low → High → Medium" in empty
+    assert "**Your tasks (0)**" in empty
+    assert "No matching tasks found." in empty
+    assert "QA Todo Row" not in empty
+    assert "QA Completed Row" not in empty
+
+    # Verify that the previous empty-list audit works
+    # through the actual LangGraph conversation.
+    audit = run_turn(
+        "Was your earlier task list correctly sorted by priority?",
+        **args,
+    )
+
+    assert "previous task list was empty" in audit
+    assert "no ordering was needed" in audit
+
+    # Create a matching task and verify only it appears.
+    active = create_task(
+        title="QA Active Row",
+        status="In progress",
+        priority="Medium",
+        path=db,
+    )
+
+    active_list = run_turn(
+        "Show my in-progress tasks sorted by priority: "
+        "Low → High → Medium.",
+        **args,
+    )
+
+    assert "**Your tasks (1)**" in active_list
+    assert f"#{active['id']}" in active_list
+    assert "QA Active Row" in active_list
+    assert "QA Todo Row" not in active_list
+    assert "QA Completed Row" not in active_list
+
+    # Other status names must work as well.
+    completed_list = run_turn(
+        "Show completed tasks",
+        **args,
+    )
+
+    assert "**Your tasks (1)**" in completed_list
+    assert f"#{done['id']}" in completed_list
+    assert "QA Todo Row" not in completed_list
+    assert "QA Active Row" not in completed_list
+
+    todo_list = run_turn(
+        "Show to-do tasks",
+        **args,
+    )
+
+    assert "**Your tasks (1)**" in todo_list
+    assert f"#{todo['id']}" in todo_list
+    assert "QA Completed Row" not in todo_list
+    assert "QA Active Row" not in todo_list
+
+    # Sorting all tasks by status is not a filter.
+    all_tasks = run_turn(
+        "Show all tasks sorted by status: "
+        "To do, In progress, Done",
+        **args,
+    )
+
+    assert "**Your tasks (3)**" in all_tasks
+    assert "QA Todo Row" in all_tasks
+    assert "QA Active Row" in all_tasks
+    assert "QA Completed Row" in all_tasks

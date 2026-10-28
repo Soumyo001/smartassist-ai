@@ -1589,13 +1589,31 @@ def build_graph(
                     or latest
                 )
 
+                # Honor explicit status filters even when
+                # a simple list request bypasses the LLM.
+                requested_status = operation.get("status")
+
+                for status, term in (
+                    ("In progress", r"in[\s-]+progress"),
+                    ("To do", r"to[\s-]+do"),
+                    ("Done", r"done|completed"),
+                ):
+                    if re.search(
+                        rf"\b(?:{term})\s+tasks?\b"
+                        rf"|\btasks?\s+(?:that\s+are\s+)?"
+                        rf"(?:{term})\b"
+                        rf"|\btasks?\s+(?:with|having)\s+"
+                        rf"status\s*(?:of\s+|:\s*|=\s*)?"
+                        rf"(?:{term})\b",
+                        list_request,
+                        re.I,
+                    ):
+                        requested_status = status
+                        break
+
                 tasks = call_tool(
                     "list_tasks",
-                    {
-                        "status": operation.get(
-                            "status"
-                        )
-                    },
+                    {"status": requested_status},
                 )
 
                 unfinished = (
