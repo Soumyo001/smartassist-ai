@@ -54,7 +54,6 @@ The seven available tools are `create_task`, `list_tasks`, `get_task`, `update_t
 ### Prerequisites
 
 - Ubuntu/Linux with **Python 3.12** (the development environment)
-- Internet access for Groq API requests
 - A **Groq API key**
 - Internet access for the initial download of ChromaDB's default embedding model, if not already cached
 
