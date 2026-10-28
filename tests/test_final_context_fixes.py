@@ -1988,3 +1988,97 @@ def test_explicit_multi_id_reads_do_not_list_everything(tmp_path):
 
     # Read-only operations must not change records.
     assert len(list_tasks(db)) == 3
+
+
+
+def test_mixed_update_and_read_in_one_turn(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "get_task",
+            "update_task",
+        ]
+    }))
+
+    edited = create_task(
+        title="QA Mixed Edited",
+        path=db,
+    )
+
+    inspected = create_task(
+        title="QA Mixed Inspected",
+        path=db,
+    )
+
+    untouched = create_task(
+        title="QA Mixed Untouched",
+        path=db,
+    )
+
+    class PlannedActions:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            return ActionPlan(operations=[
+                Operation(
+                    action="update_task",
+                    task_id=edited["id"],
+                    status="In progress",
+                ),
+                Operation(
+                    action="get_task",
+                    task_id=inspected["id"],
+                ),
+            ])
+
+    planner = PlannedActions()
+
+    answer = run_turn(
+        f"Move task #{edited['id']} to In progress, "
+        f"then show details for task #{inspected['id']}.",
+        planner=planner,
+        thread_id="mixed-actions-regression",
+        db_path=db,
+        checkpoint_path=cp,
+        permissions_path=permissions,
+        chroma_path=tmp_path / "chroma",
+    )
+
+    # Both operations must execute from one plan.
+    assert planner.calls == 1
+
+    assert answer.count(
+        "✅ **Task updated**"
+    ) == 1
+
+    assert answer.count(
+        "✅ **Task details**"
+    ) == 1
+
+    # Operations must be displayed in their planned order.
+    assert (
+        answer.index(f"#{edited['id']} ·")
+        < answer.index(f"#{inspected['id']} ·")
+    )
+
+    # Only the requested update should change state.
+    assert get_task(
+        edited["id"], db
+    )["status"] == "In progress"
+
+    assert get_task(
+        inspected["id"], db
+    )["status"] == "To do"
+
+    assert get_task(
+        untouched["id"], db
+    )["status"] == "To do"
+
+    # No tasks were accidentally created or deleted.
+    assert len(list_tasks(db)) == 3
