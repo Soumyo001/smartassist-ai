@@ -2335,3 +2335,67 @@ def test_two_task_mutations_in_one_turn(tmp_path):
     )["status"] == "To do"
 
     assert len(list_tasks(db)) == 3
+
+
+def test_pending_tasks_exclude_completed_tasks(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": ["list_tasks"]
+    }))
+
+    todo = create_task(
+        title="QA Pending Todo",
+        status="To do",
+        path=db,
+    )
+
+    ongoing = create_task(
+        title="QA Pending In Progress",
+        status="In progress",
+        path=db,
+    )
+
+    completed = create_task(
+        title="QA Pending Completed",
+        status="Done",
+        path=db,
+    )
+
+    class NoPlanner:
+        def invoke(self, messages):
+            raise AssertionError(
+                "Simple pending lists must not call Groq"
+            )
+
+    args = {
+        "planner": NoPlanner(),
+        "thread_id": "pending-filter-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    for prompt in (
+        "list all pending tasks",
+        "show pending tasks",
+        "list all unfinished tasks",
+    ):
+        result = run_turn(prompt, **args)
+
+        assert "**Your tasks (2)**" in result
+        assert f"#{todo['id']} ·" in result
+        assert f"#{ongoing['id']} ·" in result
+        assert f"#{completed['id']} ·" not in result
+
+    # An ordinary all-tasks request must still show all 3.
+    all_tasks = run_turn("show all tasks", **args)
+
+    assert "**Your tasks (3)**" in all_tasks
+    assert f"#{completed['id']} ·" in all_tasks
+
+    # Read-only queries must never change the database.
+    assert len(list_tasks(db)) == 3

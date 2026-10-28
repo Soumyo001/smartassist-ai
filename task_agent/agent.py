@@ -1833,7 +1833,7 @@ def build_graph(
                     )
                     or bool(
                         re.search(
-                            r"\b(unfinished|incomplete|"
+                            r"\b(unfinished|incomplete|pending|"
                             r"not done)\b",
                             list_request,
                             re.I,
