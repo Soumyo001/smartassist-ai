@@ -2082,3 +2082,88 @@ def test_mixed_update_and_read_in_one_turn(tmp_path):
 
     # No tasks were accidentally created or deleted.
     assert len(list_tasks(db)) == 3
+
+
+def test_task_advice_respects_requested_count(tmp_path):
+    import re
+
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": ["list_tasks"]
+    }))
+
+    for number in range(1, 7):
+        create_task(
+            title=f"QA Advice Task {number}",
+            priority="High" if number <= 2 else "Medium",
+            path=db,
+        )
+
+    create_task(
+        title="QA Completed Advice Task",
+        status="Done",
+        path=db,
+    )
+
+    before = list_tasks(db)
+
+    class AdvicePlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            return ActionPlan(mode="task_advice")
+
+    planner = AdvicePlanner()
+
+    args = {
+        "planner": planner,
+        "thread_id": "advice-count-regression",
+        "db_path": db,
+        "checkpoint_path": cp,
+        "permissions_path": permissions,
+        "chroma_path": tmp_path / "chroma",
+    }
+
+    def recommendation_count(reply):
+        return len(re.findall(
+            r"(?m)^\d+\. \*\*#\d+",
+            reply,
+        ))
+
+    default = run_turn(
+        "Help me decide what to work on next. "
+        "Do not change any tasks.",
+        **args,
+    )
+
+    assert recommendation_count(default) == 3
+
+    five = run_turn(
+        "I'm feeling overwhelmed. "
+        "Which five should I focus on first, and why? "
+        "Please don't modify anything.",
+        **args,
+    )
+
+    assert recommendation_count(five) == 5
+
+    numeric = run_turn(
+        "Recommend 5 tasks to focus on next. "
+        "Don't modify anything.",
+        **args,
+    )
+
+    assert recommendation_count(numeric) == 5
+
+    # Completed tasks must not be recommended.
+    assert "QA Completed Advice Task" not in five
+
+    # Advice must never mutate task records.
+    assert list_tasks(db) == before
+
+    assert planner.calls == 3

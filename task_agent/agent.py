@@ -204,6 +204,47 @@ def normalize(text: str) -> str:
     return normal_words(text)
 
 
+def requested_advice_limit(text: str) -> int:
+    """Extract how many task recommendations the user wants."""
+
+    match = re.search(
+        r"\b(?:which|what\s+are|recommend|suggest|"
+        r"pick|choose|show|list|give me|top)\s+"
+        r"(?:(?:me|the|my)\s+)?"
+        r"(?:(?:top|first)\s+)?"
+        r"(?P<count>\d{1,2}|one|two|three|four|five|"
+        r"six|seven|eight|nine|ten)\b",
+        text,
+        re.I,
+    )
+
+    if not match:
+        return 3
+
+    words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+
+    value = match.group("count").lower()
+
+    count = (
+        int(value)
+        if value.isdigit()
+        else words[value]
+    )
+
+    return min(count, 10) if count > 0 else 3
+
+
 def sort_priority_then_date(
     tasks: list[dict],
     request: str,
@@ -1289,6 +1330,7 @@ def build_graph(
                     today=datetime.now(
                         ZoneInfo("Asia/Dhaka")
                     ).date(),
+                    limit=requested_advice_limit(latest),
                 )
 
             return {
