@@ -1223,3 +1223,49 @@ def test_partial_delete_title_cannot_authorize_model_guess(
     assert "Task deleted" not in result
 
     assert get_task(beta["id"], db) is not None
+
+
+def test_empty_priority_list_is_correctly_audited():
+    # Empty task lists must include their count.
+    empty_list = format_task_list([])
+
+    assert empty_list == (
+        "**Your tasks (0)**\n\n"
+        "No matching tasks found."
+    )
+
+    # Custom headings must remain consistent.
+    assert format_task_list(
+        [],
+        heading="Related tasks",
+    ) == (
+        "**Related tasks (0)**\n\n"
+        "No matching tasks found."
+    )
+
+    # Simulate a real priority-sorted response.
+    history = [
+        (
+            "*Sorted by priority: "
+            "Low → High → Medium*\n\n"
+            + empty_list
+        ),
+        "The previous list contained no matching tasks.",
+    ]
+
+    result = audit_last_priority_list(history)
+
+    assert result == (
+        "The previous task list was empty, "
+        "so no ordering was needed."
+    )
+
+    # Existing nonempty formatting must still work.
+    nonempty_list = example_list(
+        ["Low", "High", "Medium"]
+    )
+
+    assert "**Your tasks (3)**" in nonempty_list
+    assert "**Yes.**" in audit_last_priority_list(
+        [nonempty_list]
+    )

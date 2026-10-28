@@ -424,7 +424,7 @@ def format_task_list(
 
     if not tasks:
         return (
-            f"**{heading}**\n\n"
+            f"**{heading} (0)**\n\n"
             "No matching tasks found."
         )
 
