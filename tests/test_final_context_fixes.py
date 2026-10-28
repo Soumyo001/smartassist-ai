@@ -2399,3 +2399,123 @@ def test_pending_tasks_exclude_completed_tasks(tmp_path):
 
     # Read-only queries must never change the database.
     assert len(list_tasks(db)) == 3
+
+
+def test_two_named_status_updates_with_missing_targets(tmp_path):
+    from task_agent.agent import recover_missing_status_targets
+
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "list_tasks",
+            "get_task",
+            "update_task",
+        ]
+    }))
+
+    demo = create_task(
+        title="SmartAssist Demo Recording",
+        status="To do",
+        path=db,
+    )
+
+    report = create_task(
+        title="SmartAssist Weekly Report",
+        status="To do",
+        path=db,
+    )
+
+    control = create_task(
+        title="Unrelated Control Task",
+        status="To do",
+        path=db,
+    )
+
+    class MissingTargetPlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+
+            # Simulate Groq returning both operations
+            # without task_id or target.
+            return ActionPlan(operations=[
+                Operation(
+                    action="update_task",
+                    status="In progress",
+                ),
+                Operation(
+                    action="update_task",
+                    status="Done",
+                ),
+            ])
+
+    planner = MissingTargetPlanner()
+
+    prompt = (
+        "Move the SmartAssist Demo Recording task "
+        "to In progress and mark the "
+        "SmartAssist Weekly Report task Done."
+    )
+
+    reply = run_turn(
+        prompt,
+        planner=planner,
+        thread_id="named-status-recovery",
+        db_path=db,
+        checkpoint_path=cp,
+        permissions_path=permissions,
+        chroma_path=tmp_path / "chroma",
+    )
+
+    assert planner.calls == 1
+    assert reply.count("✅ **Task updated**") == 2
+
+    assert (
+        get_task(demo["id"], db)["status"]
+        == "In progress"
+    )
+
+    assert (
+        get_task(report["id"], db)["status"]
+        == "Done"
+    )
+
+    assert (
+        get_task(control["id"], db)["status"]
+        == "To do"
+    )
+
+    assert (
+        reply.index(f"#{demo['id']} ·")
+        < reply.index(f"#{report['id']} ·")
+    )
+
+    # A reversed, inconsistent plan must not be repaired.
+    unsafe = ActionPlan(operations=[
+        Operation(
+            action="update_task",
+            status="Done",
+        ),
+        Operation(
+            action="update_task",
+            status="In progress",
+        ),
+    ])
+
+    unchanged = recover_missing_status_targets(
+        unsafe,
+        prompt,
+        list_tasks(db),
+    )
+
+    assert all(
+        operation.target is None
+        for operation in unchanged.operations
+    )
+
+    assert len(list_tasks(db)) == 3
