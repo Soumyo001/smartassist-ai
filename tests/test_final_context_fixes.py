@@ -2236,3 +2236,102 @@ def test_advice_ranking_balances_urgency_and_priority():
 
     # Recommendations must never change task data.
     assert tasks == before
+
+
+def test_two_task_mutations_in_one_turn(tmp_path):
+    db = tmp_path / "tasks.sqlite3"
+    cp = tmp_path / "checkpoints.sqlite3"
+    permissions = tmp_path / "permissions.json"
+
+    permissions.write_text(json.dumps({
+        "enabled_tools": [
+            "list_tasks",
+            "get_task",
+            "update_task",
+            "complete_task",
+        ]
+    }))
+
+    demo = create_task(
+        title="QA Demo Task",
+        status="To do",
+        path=db,
+    )
+
+    report = create_task(
+        title="QA Weekly Report",
+        status="To do",
+        path=db,
+    )
+
+    control = create_task(
+        title="QA Unrelated Task",
+        status="To do",
+        path=db,
+    )
+
+    class TwoActionPlanner:
+        def __init__(self):
+            self.calls = 0
+
+        def invoke(self, messages):
+            self.calls += 1
+            return ActionPlan(
+                operations=[
+                    Operation(
+                        action="update_task",
+                        task_id=demo["id"],
+                        status="In progress",
+                    ),
+                    Operation(
+                        action="complete_task",
+                        task_id=report["id"],
+                    ),
+                ]
+            )
+
+    planner = TwoActionPlanner()
+
+    response = run_turn(
+        f"Move task #{demo['id']} to In progress "
+        f"and mark task #{report['id']} Done.",
+        planner=planner,
+        thread_id="two-mutations-test",
+        db_path=db,
+        checkpoint_path=cp,
+        permissions_path=permissions,
+        chroma_path=tmp_path / "chroma",
+    )
+
+    # One planner request, two executed actions.
+    assert planner.calls == 1
+
+    assert response.count(
+        "✅ **Task updated**"
+    ) == 1
+
+    assert response.count(
+        "✅ **Task completed**"
+    ) == 1
+
+    # Preserve the requested execution order.
+    assert (
+        response.index("✅ **Task updated**")
+        < response.index("✅ **Task completed**")
+    )
+
+    # Both changes must persist in SQLite.
+    assert get_task(
+        demo["id"], db
+    )["status"] == "In progress"
+
+    assert get_task(
+        report["id"], db
+    )["status"] == "Done"
+
+    # Unrelated tasks must remain unchanged.
+    assert get_task(
+        control["id"], db
+    )["status"] == "To do"
+
+    assert len(list_tasks(db)) == 3
