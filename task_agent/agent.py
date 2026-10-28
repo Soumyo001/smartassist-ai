@@ -1135,7 +1135,7 @@ def build_graph(
             # Sorting instructions should not be embedded
             # into the semantic search query.
             topic = re.split(
-                r"\s*,?\s+(?:in\s+the\s+order|"
+                r"\s*,?\s+(?:in\s+(?:the\s+)?order|"
                 r"(?:sorted|ordered)\s+by\s+priority)"
                 r"\s*:?\s*(?=low\b|medium\b|high\b)",
                 topic,

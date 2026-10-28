@@ -108,7 +108,7 @@ python chat_cli.py
 python -m pytest -q
 ```
 
-**Latest development result:** `73 passed` on October 28, 2026. This is the result of the developer's local test run, not a guarantee that every external API call will succeed.
+**Latest development result:** `76 passed` on October 28, 2026. This is the result of the developer's local test run, not a guarantee that every external API call will succeed.
 
 Optionally, verify live Groq structured output:
 
@@ -159,6 +159,8 @@ These are actual development issues investigated through live conversation tests
 | **Irrelevant semantic matches** | Nearest vector neighbors were not always relevant. Added a ChromaDB similarity-distance threshold and SQLite verification. | Regression tests reject weak matches while retaining relevant task results. |
 | **Recommendation count and priority** | Asking for five suggestions returned three; a distant deadline also outranked higher-priority work. Added requested-count extraction and a near-term urgency policy. | Live five-task recommendations and ranking/count regression tests passed. |
 | **Groq rate limit** | A Groq request returned HTTP 429 because the account's tokens-per-minute allowance was exceeded. | Identified as an external API quota issue; automatic rate-limit recovery has **not** been implemented. |
+| **Named multi-task update failure** | Groq occasionally produced update operations without task targets. Strengthened planning instructions and added exact-title recovery for two unambiguous status changes. Corrected an indentation error that prevented recovery from executing for validated plans. | Regression tests confirmed both intended tasks update correctly while unrelated tasks remain unchanged. |
+| **Semantic search ordering issue** | Phrases such as `in order high -> low -> medium` were included in the ChromaDB query instead of being interpreted as sorting instructions. Updated query parsing to separate the search topic from priority ordering. | Regression test and live searches confirmed accurate query extraction and sorted results. |
 
 ## Known limitations
 

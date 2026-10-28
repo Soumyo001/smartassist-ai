@@ -1634,6 +1634,17 @@ def test_sorted_semantic_search_separates_topic_and_order(
         < ordered.index(f"#{medium['id']}")
     )
 
+    # "in order" without "the" must not pollute
+    # the semantic search query.
+    without_the = run_turn(
+        "Show all unfinished tasks related to weekly reports "
+        "in order low -> high -> medium",
+        **args,
+    )
+
+    assert collection.queries[-1] == "weekly reports"
+    assert "**Related tasks (3)**" in without_the
+
     audited = run_turn(
         "was order explicitly as I said ?",
         **args,
