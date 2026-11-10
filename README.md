@@ -4,8 +4,6 @@
 
 SmartAssist-AI was developed for the **AI Agent Task Manager** internship assignment (AI & Vibe Coding). It lets users create, find, organize, update, complete, and delete tasks using natural-language instructions. The task board and AI conversation appear together, so users can see the results of their commands without switching pages.
 
-**GitHub:** https://github.com/Soumyo001/smartassist-ai
-
 ## Features
 
 - **Chat-controlled task management:** Create, list, view, edit, change status or priority, complete, and delete tasks.
